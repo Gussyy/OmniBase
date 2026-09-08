@@ -24,7 +24,9 @@ episode the arms hold 100% of frames where the best single fixed base holds 66%.
 
 The render is Isaac Sim, and it is only a picture: OmniBase computed the placements and the
 joint angles with the arithmetic in this repository, and never opened a simulator to do it.
-[Full-resolution clip](docs/omnibase_demo.mp4).
+[Full-resolution clip](docs/omnibase_demo.mp4). Both panels are at their native 480x360 — the
+recording's own wrist-camera resolution — so nothing here has been upscaled into looking
+sharper or blurrier than it is.
 
 ---
 
