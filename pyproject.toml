@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omnibase"
+version = "0.1.0"
+description = "Place a robot base per training window so free-flown gripper demonstrations become reachable"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = ["numpy>=1.22", "scipy>=1.8"]
+
+[project.optional-dependencies]
+data = ["pandas>=1.5", "pyarrow>=10"]
+
+[project.scripts]
+omnibase = "omnibase.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["omnibase*"]
