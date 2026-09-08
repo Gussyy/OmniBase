@@ -96,6 +96,10 @@ def chunk(Fs, cells, window=21, slack=None):
     Returns:
         ``(chunks, feasible)`` -- a list of :class:`Chunk`, and an (arms, frames) mask of what
         is actually held under the placement each frame ends up assigned.
+
+    Guaranteed: the fraction held is never worse than :func:`best_fixed`. Re-placing the base is
+    a choice you may decline, so it cannot cost you anything, and a chunker that scored below
+    standing still would be reporting its own bookkeeping rather than the data.
     """
     Fs = [np.asarray(F, dtype=bool) for F in Fs]
     cells = np.asarray(cells, dtype=float)
@@ -103,13 +107,23 @@ def chunk(Fs, cells, window=21, slack=None):
     slack = window // 2 if slack is None else slack
     runs = [_runs(F) for F in Fs]
 
-    def choose(run, f, cur):
+    def choose(F, run, f, cur):
         """The cell to stand on from frame f, and the frame it stops working."""
+        span = min(window, n - f)
         reach = run[f] - f
-        ok = reach >= min(window, n - f)
-        if not ok.any():                       # nothing works here; ride it out where we are
-            nxt = cur if cur is not None else int(reach.argmax())
-            return nxt, max(f + 1, int(run[f][nxt]))
+        ok = reach >= span
+        if not ok.any():
+            # Nothing can hold the whole window. Take the placement that holds the MOST of it,
+            # not the one with the longest unbroken run -- those are different cells, and
+            # picking by run length made chunking score below a single fixed base on data where
+            # no placement ever covers a window. Chunking is a free choice on top of standing
+            # still; it must never come out worse than standing still.
+            cover = F[f:f + span].sum(axis=0)
+            # If nothing holds a single frame here, stay where we are rather than wander to an
+            # arbitrary cell: moving buys nothing and a plan that jumps for no reason is one
+            # more thing for a reader to distrust.
+            nxt = cur if (cur is not None and cover.max() == 0) else int(cover.argmax())
+            return nxt, f + span
         if cur is not None and ok[cur]:
             return cur, int(run[f][cur])       # still working: never move for its own sake
         tied = np.where(ok & (reach >= reach.max(initial=0) - slack))[0]
@@ -121,7 +135,7 @@ def chunk(Fs, cells, window=21, slack=None):
     while f < n:
         picks, stops = [], []
         for a, run in enumerate(runs):
-            c, stop = choose(run, f, cur[a])
+            c, stop = choose(Fs[a], run, f, cur[a])
             picks.append(c)
             stops.append(stop)
         stop = max(f + 1, min(stops))          # the run ends as soon as ANY arm must move
@@ -298,3 +312,135 @@ def ascii_map(smap, key="score", width=None):
                 row.append(ramp[min(len(ramp) - 1, int(v[i] / top * (len(ramp) - 1)))])
         lines.append(f"  {x:+.2f} |" + "".join(row))
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------------------------
+# Arms that cannot be placed separately
+#
+# Everything above places each arm on its own. That is right for arms on separate stands, and
+# wrong for almost every real bimanual robot: two arms on one torso, a humanoid, a pair bolted
+# to the same rail. There the spacing is a property of the hardware and the only thing you can
+# choose is where the whole assembly stands -- and a placement that suits the right arm is no
+# use if it puts the left one somewhere it cannot reach.
+#
+# So the assembly is placed instead of the arms. Each arm sits at a fixed offset from a mount
+# frame, and a candidate is feasible only where EVERY arm can hold its own trajectory. The
+# result is strictly worse than placing them independently, which is the honest point: it is
+# what the hardware actually permits.
+# ---------------------------------------------------------------------------------------------
+
+
+@dataclass
+class Mount:
+    """Arms rigidly attached to one frame -- a torso, a rail, a bimanual base plate.
+
+    Args:
+        offsets: one ``(x, y, z)`` per arm, or ``(x, y, z, qx, qy, qz, qw)`` if an arm is also
+            turned relative to the mount, which shoulders usually are.
+        names: what to call each arm in reports.
+    """
+
+    offsets: list
+    names: list = None
+
+    def __post_init__(self):
+        fixed = []
+        for o in self.offsets:
+            o = np.asarray(o, dtype=float)
+            if o.shape == (3,):
+                o = np.concatenate([o, [0.0, 0.0, 0.0, 1.0]])
+            if o.shape != (7,):
+                raise ValueError(f"a mount offset is (x,y,z) or (x,y,z,qx,qy,qz,qw), got {o.shape}")
+            fixed.append(o)
+        self.offsets = fixed
+        if self.names is None:
+            self.names = [f"arm{i}" for i in range(len(fixed))]
+
+    def __len__(self):
+        return len(self.offsets)
+
+
+def pair(separation, along="y", names=("right", "left")):
+    """The common case: two identical arms a fixed distance apart, facing the same way.
+
+    ``separation`` is centre to centre, so ``pair(0.46)`` puts them at -0.23 and +0.23.
+    """
+    a = {"x": 0, "y": 1, "z": 2}[along]
+    offs = []
+    for sign in (-1.0, 1.0):
+        o = np.zeros(3)
+        o[a] = sign * separation / 2.0
+        offs.append(o)
+    return Mount(offs, list(names))
+
+
+def mount_grid(span=0.42, step=0.02, height=0.08, yaws=(0.0,), centre=(0.0, 0.0)):
+    """Candidate placements for a whole assembly: ``(x, y, z, yaw)`` rows.
+
+    Yaw matters here in a way it does not for a single arm. Turning one arm about its own base
+    is the same as turning the target around it, and a shoulder joint absorbs it; turning a
+    torso swings the second arm through an arc, which changes what it can reach. Sweep a few.
+    """
+    g = np.round(np.arange(-span, span + 1e-9, step), 6)
+    return np.array([(centre[0] + x, centre[1] + y, height, w)
+                     for w in yaws for y in g for x in g])
+
+
+def _yawmat(w):
+    c, s = np.cos(w), np.sin(w)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+
+
+def arm_bases(mount, cell):
+    """Where each arm's base ends up, for one assembly placement.
+
+    Returns a list of ``(position, rotation matrix)`` -- what you would bolt down, or hand to a
+    simulator as the arm's root pose.
+    """
+    cell = np.asarray(cell, dtype=float)
+    t, yaw = cell[:3], (cell[3] if cell.size > 3 else 0.0)
+    Y = _yawmat(yaw)
+    out = []
+    for off in mount.offsets:
+        out.append((t + Y @ off[:3], Y @ R.from_quat(off[3:]).as_matrix()))
+    return out
+
+
+def mount_feasibility(chains, hands, mount, cells, pos_tol=0.015, rot_tol=np.radians(20.0)):
+    """Where the whole assembly can stand: ``(combined, per_arm)`` masks over ``cells``.
+
+    Args:
+        chains: one :class:`~omnibase.chain.Chain` shared by every arm, or one per arm.
+        hands: ``(pos, quat)`` per arm, in the same order as ``mount.offsets``.
+
+    ``combined[f, c]`` is true only where every arm can hold frame ``f`` with the assembly at
+    ``c``. Feed it straight to :func:`chunk` as a single mask and the chunks come back with one
+    placement each -- the assembly's, which is the only thing there was to choose.
+    """
+    if not isinstance(chains, (list, tuple)):
+        chains = [chains] * len(mount)
+    if not (len(chains) == len(hands) == len(mount)):
+        raise ValueError(f"{len(chains)} chain(s), {len(hands)} hand(s) and {len(mount)} mount "
+                         "offset(s) must agree")
+    cells = np.asarray(cells, dtype=float)
+    n = len(hands[0][0])
+    per = [np.zeros((n, len(cells)), dtype=bool) for _ in hands]
+
+    # The mount's yaw turns the arm, so the targets have to be brought into the turned frame.
+    # Doing it per distinct yaw rather than per cell keeps the rotation work off the inner loop.
+    yaws = cells[:, 3] if cells.shape[1] > 3 else np.zeros(len(cells))
+    for w in np.unique(yaws):
+        Y = _yawmat(w)
+        which = np.where(yaws == w)[0]
+        for a, (pos, quat) in enumerate(hands):
+            Rt = R.from_quat(np.asarray(quat, dtype=float)).as_matrix()
+            off = mount.offsets[a]
+            A = (Y @ R.from_quat(off[3:]).as_matrix())          # arm frame in the world
+            p_in = np.asarray(pos, dtype=float) @ A             # A.T @ p, batched
+            R_in = np.einsum("ij,njk->nik", A.T, Rt)
+            for c in which:
+                base = cells[c, :3] + Y @ off[:3]
+                _, pe, re = chains[a].ik(p_in - base @ A, R_in)
+                per[a][:, c] = (pe < pos_tol) & (re < rot_tol)
+    combined = np.logical_and.reduce(per)
+    return combined, per

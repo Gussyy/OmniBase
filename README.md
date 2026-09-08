@@ -97,6 +97,56 @@ Fs = [ob.feasibility(chain, h.pos, h.quat, cells) for h in ep.hands]
 chunks, held = ob.chunk(Fs, cells, window=21)
 ```
 
+### Arms that cannot be placed separately
+
+The above places each arm on its own. That is right for arms on separate stands and wrong for
+almost every real bimanual robot: two arms on one torso, a humanoid, a pair bolted to the same
+rail. There the spacing is hardware, and the only thing you choose is where the whole assembly
+stands — so a placement that suits the right arm is no use if it strands the left one.
+
+Place the assembly instead:
+
+```python
+mount = ob.pair(0.46)                                  # two arms, 0.46 m apart, one plate
+cells = ob.mount_grid(span=0.34, step=0.02, height=0.08,
+                      yaws=np.radians([-20, 0, 20]))   # a torso can turn, too
+combined, per_arm = ob.mount_feasibility(chain, [(h.pos, h.quat) for h in ep.hands],
+                                         mount, cells)
+chunks, held = ob.chunk([combined], cells, window=21)  # one placement to choose, not two
+
+for (p, rot) in ob.arm_bases(mount, chunks[0].bases[0]):
+    print("bolt an arm at", p.round(3))
+```
+
+`combined[f, c]` is true only where **every** arm can hold frame `f`. For arms mounted at an
+angle — shoulders usually are — give each offset as `(x, y, z, qx, qy, qz, qw)` and build the
+`Mount` directly instead of using `pair`.
+
+```bash
+python -m omnibase plan datasets/mine --episode 6 --pair 0.46 --mount-yaw=-20,0,20
+```
+```
+  rigid pair, 0.460 m apart -- placing the assembly, not the arms
+
+  5 chunk(s); the assembly moves 4 time(s):
+    chunk 1: frames   21-  72   mount (-0.05,+0.05,+0.08) yaw +0
+                                -> right [-0.05, -0.18, 0.08]  left [-0.05, 0.28, 0.08]
+                                both held 100.0%
+
+  BOTH arms at once: chunked 71.1% of frames held, against 41.4% for the best single placement
+     right alone would manage  45.4% -- bolting them together costs the difference
+      left alone would manage 100.0% -- bolting them together costs the difference
+```
+
+Note what that last pair of lines is for. Coupling is a constraint and can only ever cost you
+reach, so it is worth seeing the size of the bill: here the left arm could have had everything
+and gives most of it up to stay bolted to the right one. If that number is uncomfortable, it is
+an argument about your hardware, not about your data.
+
+Mount yaw is a real degree of freedom in a way a single arm's is not: turning one arm about its
+own base is something its shoulder joint absorbs, but turning a torso swings the far arm through
+an arc and changes what it can reach.
+
 ### LeRobot datasets
 
 Both on-disk layouts are read, and both kinds of action column:

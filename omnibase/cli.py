@@ -13,14 +13,31 @@ from pathlib import Path
 import numpy as np
 
 from .data import describe_dataset, load
-from .plan import (SCORE_TERMS, ascii_map, base_grid, best_fixed, best_spot,
-                   chunk, feasibility, score_map, yield_curve)
+from .plan import (SCORE_TERMS, arm_bases, ascii_map, base_grid, best_fixed, best_spot,
+                   chunk, feasibility, mount_feasibility, mount_grid, pair, score_map,
+                   yield_curve)
 from .robots import describe
 from .robots import load as load_robot
 
 
 def _grid(a):
     return base_grid(span=a.span, step=a.step, height=a.height)
+
+
+def _mount(a, hands):
+    """A rigid assembly, if --pair asked for one. Returns ``(mount, cells)`` or ``(None, None)``.
+
+    Two arms on one torso cannot be placed separately: the spacing is hardware, and the only
+    choice is where the whole thing stands.
+    """
+    if not a.pair:
+        return None, None
+    if len(hands) != 2:
+        raise SystemExit(f"--pair needs exactly two hands, this episode gave "
+                         f"{[h.name for h in hands]}; narrow it with --hands")
+    yaws = np.radians([float(v) for v in str(a.mount_yaw).split(",")])
+    mount = pair(a.pair, names=[h.name for h in hands])
+    return mount, mount_grid(span=a.span, step=a.step, height=a.height, yaws=yaws)
 
 
 def _load(a):
@@ -51,27 +68,59 @@ def cmd_plan(a):
           f"{', '.join(repr(h.name) + (' (from joints)' if h.source == 'fk' else '') for h in hands)}"
           f", {len(cells)} candidate placements at height {a.height:+.3f} m")
 
-    Fs = [feasibility(chain, h.pos, h.quat, cells, a.pos_tol, np.radians(a.rot_tol))
-          for h in hands]
-    chunks, held = chunk(Fs, cells, window=a.window)
+    mount, mcells = _mount(a, hands)
+    if mount is not None:
+        cells = mcells
+        combined, per = mount_feasibility(chain, [(h.pos, h.quat) for h in hands], mount, cells,
+                                          a.pos_tol, np.radians(a.rot_tol))
+        # One placement to choose, not one per arm: the assembly's.
+        Fs, chunks, held = per, *chunk([combined], cells, window=a.window)
+        print(f"  rigid pair, {a.pair:.3f} m apart -- placing the assembly, not the arms")
+    else:
+        Fs = [feasibility(chain, h.pos, h.quat, cells, a.pos_tol, np.radians(a.rot_tol))
+              for h in hands]
+        chunks, held = chunk(Fs, cells, window=a.window)
 
-    print(f"\n{len(chunks)} chunk(s); the bases move {len(chunks) - 1} time(s):")
+    print(f"\n{len(chunks)} chunk(s); "
+          f"{'the assembly moves' if mount is not None else 'the bases move'} "
+          f"{len(chunks) - 1} time(s):")
     for i, ch in enumerate(chunks):
-        bits = "   ".join(f"{hands[k].name} ({b[0]:+.2f},{b[1]:+.2f},{b[2]:+.2f}) "
-                          f"held {100 * h:5.1f}%"
-                          for k, (b, h) in enumerate(zip(ch.bases, ch.held)))
+        if mount is not None:
+            c = ch.bases[0]
+            at = "  ".join(f"{n} {np.round(b, 2).tolist()}"
+                           for n, (b, _) in zip(mount.names, arm_bases(mount, c)))
+            yaw = f" yaw {np.degrees(c[3]):+.0f}" if len(c) > 3 else ""
+            bits = (f"mount ({c[0]:+.2f},{c[1]:+.2f},{c[2]:+.2f}){yaw} -> {at}   "
+                    f"both held {100 * ch.held[0]:5.1f}%")
+        else:
+            bits = "   ".join(f"{hands[k].name} ({b[0]:+.2f},{b[1]:+.2f},{b[2]:+.2f}) "
+                              f"held {100 * h:5.1f}%"
+                              for k, (b, h) in enumerate(zip(ch.bases, ch.held)))
         print(f"  chunk {i}: frames {ch.start:4d}-{ch.stop:4d} ({len(ch):4d})  {bits}")
 
     print()
+    if mount is not None:
+        cell, share = best_fixed(combined, cells)
+        print(f"  BOTH arms at once: chunked {100 * held[0].mean():5.1f}% of frames held, "
+              f"against {100 * share:5.1f}% for the best single assembly placement")
+        for k, F in enumerate(Fs):
+            print(f"    {hands[k].name:>6} alone would manage {100 * F.mean(0).max():5.1f}% "
+                  "-- bolting them together costs the difference")
+        return _write(a, ep, hands, chunks, mount)
     for k, F in enumerate(Fs):
         cell, share = best_fixed(F, cells)
         print(f"  {hands[k].name:>6}: chunked {100 * held[k].mean():5.1f}% of frames held, against "
               f"{100 * share:5.1f}% for the best single base "
               f"({cell[0]:+.2f}, {cell[1]:+.2f}, {cell[2]:+.2f})")
 
+    return _write(a, ep, hands, chunks, None)
+
+
+def _write(a, ep, hands, chunks, mount):
     if a.out:
         out = dict(dataset=str(a.dataset), episode=int(ep.index), robot=a.robot,
                    window=a.window, hands=[h.name for h in hands],
+                   pair=(a.pair if mount is not None else None),
                    pos_tol=a.pos_tol, rot_tol_deg=a.rot_tol, height=a.height,
                    chunks=[dict(start=ch.start, stop=ch.stop,
                                 bases=[[round(float(v), 4) for v in b] for b in ch.bases],
@@ -86,9 +135,17 @@ def cmd_curve(a):
     cells = _grid(a)
     print(f"episode {ep.index}: how much survives, against how long one base must serve\n")
     print(f"  {'window':>12} {'usable':>8} {'placements':>12}")
-    for h in hands:
-        F = feasibility(chain, h.pos, h.quat, cells, a.pos_tol, np.radians(a.rot_tol))
-        print(f"  {h.name}:")
+    mount, mcells = _mount(a, hands)
+    if mount is not None:
+        cells = mcells
+        combined, _ = mount_feasibility(chain, [(h.pos, h.quat) for h in hands], mount, cells,
+                                        a.pos_tol, np.radians(a.rot_tol))
+        series = [(f"both arms, rigid pair {a.pair:.2f} m", combined)]
+    else:
+        series = [(h.name, feasibility(chain, h.pos, h.quat, cells, a.pos_tol,
+                                       np.radians(a.rot_tol))) for h in hands]
+    for name, F in series:
+        print(f"  {name}:")
         for row in yield_curve(F, cells):
             w = "whole episode" if row["window"] is None else f"{row['window']} frames"
             print(f"  {w:>12} {100 * row['usable']:7.1f}% "
@@ -143,6 +200,14 @@ def main(argv=None):
             q.add_argument("--column", default="action",
                            choices=("action", "observation.state"),
                            help="commanded poses or measured ones")
+            q.add_argument("--pair", type=float, default=None, metavar="METRES",
+                           help="the two arms are rigidly coupled this far apart -- a torso, a "
+                                "humanoid, one base plate. Places the assembly instead of the "
+                                "arms, so a placement only counts where BOTH can reach.")
+            q.add_argument("--mount-yaw", default="0", metavar="DEG,DEG",
+                           help="mount headings to try with --pair. Turning a torso swings the "
+                                "far arm through an arc, so this is a real degree of freedom "
+                                "in a way a single arm's yaw is not.")
         q.add_argument("--robot", default="so101")
         q.add_argument("--window", type=int, default=21,
                        help="frames one base must cover: your policy's observation buffer plus "

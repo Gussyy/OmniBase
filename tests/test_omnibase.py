@@ -168,6 +168,81 @@ def test_score_map_ranks_placements_sensibly():
     assert "coverage" in ob.ascii_map(smap, "coverage")
 
 
+def test_chunking_never_loses_to_standing_still():
+    """Re-placing the base is optional, so it cannot come out worse than one fixed base.
+
+    It did, once: when no placement could hold a whole window the fallback took the longest
+    unbroken run instead of the best coverage, and on rigidly-coupled arms -- where whole
+    windows are often unservable -- that scored below simply standing in the best spot.
+    """
+    ch = ob.so101()
+    t = np.linspace(0, 1, 70)
+    # A deliberately awkward path: wide, and swinging the heading well out of any one plane.
+    pos = np.stack([0.26 + 0.16 * np.cos(3 * t), 0.22 * np.sin(3 * t), 0.12 + 0.10 * t], -1)
+    quat = R.from_euler("y", (90 + 55 * np.sin(4 * t))[:, None], degrees=True).as_quat()
+    cells = ob.base_grid(span=0.32, step=0.04, height=0.08)
+    F = ob.feasibility(ch, pos, quat, cells)
+    _, fixed = ob.best_fixed(F, cells)
+    for window in (5, 21, 50, len(pos), len(pos) * 2):
+        _, held = ob.chunk([F], cells, window=window)
+        assert held.mean() >= fixed - 1e-9, (
+            f"window {window}: chunked {held.mean():.3f} < best fixed base {fixed:.3f}")
+
+
+def test_rigid_pair_is_never_better_than_free_arms():
+    """Bolting two arms together is a constraint, so it can only cost reach, never add it."""
+    ch = ob.so101()
+    t = np.linspace(0, 1, 40)
+    hands = []
+    for sign in (-1.0, 1.0):
+        pos = np.stack([0.24 + 0.06 * np.cos(4 * t),
+                        sign * 0.10 + 0.05 * np.sin(4 * t), 0.14 + 0.03 * t], -1)
+        quat = R.from_euler("y", (90 + 15 * np.sin(5 * t))[:, None], degrees=True).as_quat()
+        hands.append((pos, quat))
+
+    mount = ob.pair(0.30)
+    assert len(mount) == 2 and mount.names == ["right", "left"]
+    cells = ob.mount_grid(span=0.28, step=0.07, height=0.08)
+    comb, per = ob.mount_feasibility(ch, hands, mount, cells)
+
+    # The combined mask is exactly "every arm can", not something looser.
+    assert np.array_equal(comb, per[0] & per[1])
+    for a in (0, 1):
+        assert comb.mean() <= per[a].mean() + 1e-12
+
+    # A mounted arm stands at cell + offset, not at cell, so the honest comparison is against
+    # a free arm at those same shifted positions -- and there it must agree EXACTLY, because
+    # with no mount yaw the two are the same solve. This is what catches a wrong transform.
+    for a, (p, q) in enumerate(hands):
+        shifted = cells[:, :3] + mount.offsets[a][:3]
+        free = ob.feasibility(ch, p, q, shifted)
+        assert np.array_equal(free, per[a]), "the mount transform disagrees with a free solve"
+
+    # arm_bases must put the arms where the mount says they are: the right separation, in line.
+    for cell in (cells[0], cells[len(cells) // 2]):
+        (pr, _), (pl, _) = ob.arm_bases(mount, cell)
+        assert abs(np.linalg.norm(pl - pr) - 0.30) < 1e-9
+        assert np.allclose((pr + pl) / 2.0, cell[:3])
+
+
+def test_mount_yaw_turns_the_whole_assembly():
+    """Turning the mount and turning the world about it must come to the same thing."""
+    ch = ob.so101()
+    t = np.linspace(0, 1, 24)
+    pos = np.stack([0.24 + 0.05 * np.cos(4 * t), 0.05 * np.sin(4 * t), 0.15 + 0.02 * t], -1)
+    quat = R.from_euler("y", (90 + 10 * np.sin(3 * t))[:, None], degrees=True).as_quat()
+    hands = [(pos, quat), (pos + np.array([0.0, 0.18, 0.0]), quat)]
+    mount = ob.pair(0.26)
+    w = np.radians(35.0)
+
+    plain = ob.mount_feasibility(ch, hands, mount, np.array([[0.0, 0.0, 0.08, 0.0]]))[0]
+    # Same scene, rotated about the origin, with the mount turned to match.
+    Y = R.from_rotvec([0.0, 0.0, w])
+    turned = [(Y.apply(p), (Y * R.from_quat(q)).as_quat()) for p, q in hands]
+    rot = ob.mount_feasibility(ch, turned, mount, np.array([[0.0, 0.0, 0.08, w]]))[0]
+    assert np.array_equal(plain, rot), "mount yaw does not agree with rotating the scene"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
