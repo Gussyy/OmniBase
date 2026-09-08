@@ -14,6 +14,20 @@ numpy and scipy. No simulator, no learned model, no rollout.
 
 ---
 
+![OmniBase: recorded wrist camera on the left, the same data driving two SO-101s on the right](docs/omnibase_demo.gif)
+
+**Left: the data.** The wrist camera of a hand-held gripper, one episode, exactly as recorded.
+**Right: the same data, retargeted.** Two SO-ARM101s driven to joint angles OmniBase solved for,
+each standing where it says a base would have to stand. Frame-for-frame in sync — the recording
+never changes, only the robot under it does. The base is re-placed three times, and across the
+episode the arms hold 100% of frames where the best single fixed base holds 66%.
+
+The render is Isaac Sim, and it is only a picture: OmniBase computed the placements and the
+joint angles with the arithmetic in this repository, and never opened a simulator to do it.
+[Full-resolution clip](docs/omnibase_demo.mp4).
+
+---
+
 ## The idea in one table
 
 A policy never sees a whole episode at once. It sees an observation window and predicts an
