@@ -12,10 +12,11 @@ from pathlib import Path
 
 import numpy as np
 
-from .data import from_parquet, normalise_quats
+from .data import describe_dataset, load
 from .plan import (SCORE_TERMS, ascii_map, base_grid, best_fixed, best_spot,
                    chunk, feasibility, score_map, yield_curve)
-from .robots import describe, load
+from .robots import describe
+from .robots import load as load_robot
 
 
 def _grid(a):
@@ -23,38 +24,54 @@ def _grid(a):
 
 
 def _load(a):
-    ep, hands = from_parquet(a.dataset, episode=a.episode,
-                             hands=[int(v) for v in a.hands.split(",")], width=a.width)
-    return ep, [(p, normalise_quats(q), g) for p, q, g in hands]
+    """The episode's hands, filtered by --hands, which takes names or indices."""
+    ep = load(a.dataset, episode=a.episode, chain=load_robot(a.robot), column=a.column)
+    hands = list(ep.hands)
+    if a.hands:
+        want = [w.strip() for w in a.hands.split(",") if w.strip()]
+        chosen = []
+        for w in want:
+            if w.isdigit() and int(w) < len(hands):
+                chosen.append(hands[int(w)])
+            else:
+                match = [h for h in hands if h.name == w]
+                if not match:
+                    raise SystemExit(f"no hand {w!r}; this episode has "
+                                     f"{[h.name for h in hands]}")
+                chosen.append(match[0])
+        hands = chosen
+    return ep, hands
 
 
 def cmd_plan(a):
-    chain = load(a.robot)
+    chain = load_robot(a.robot)
     ep, hands = _load(a)
     cells = _grid(a)
-    n = len(hands[0][0])
-    print(f"episode {ep}: {n} frames, {len(hands)} hand(s), {len(cells)} candidate placements "
-          f"at height {a.height:+.3f} m")
+    print(f"episode {ep.index}: {ep.frames} frames, "
+          f"{', '.join(repr(h.name) + (' (from joints)' if h.source == 'fk' else '') for h in hands)}"
+          f", {len(cells)} candidate placements at height {a.height:+.3f} m")
 
-    Fs = [feasibility(chain, p, q, cells, a.pos_tol, np.radians(a.rot_tol))
-          for p, q, _ in hands]
+    Fs = [feasibility(chain, h.pos, h.quat, cells, a.pos_tol, np.radians(a.rot_tol))
+          for h in hands]
     chunks, held = chunk(Fs, cells, window=a.window)
 
     print(f"\n{len(chunks)} chunk(s); the bases move {len(chunks) - 1} time(s):")
     for i, ch in enumerate(chunks):
-        bits = "   ".join(f"h{k} ({b[0]:+.2f},{b[1]:+.2f},{b[2]:+.2f}) held {100 * h:5.1f}%"
+        bits = "   ".join(f"{hands[k].name} ({b[0]:+.2f},{b[1]:+.2f},{b[2]:+.2f}) "
+                          f"held {100 * h:5.1f}%"
                           for k, (b, h) in enumerate(zip(ch.bases, ch.held)))
         print(f"  chunk {i}: frames {ch.start:4d}-{ch.stop:4d} ({len(ch):4d})  {bits}")
 
     print()
     for k, F in enumerate(Fs):
         cell, share = best_fixed(F, cells)
-        print(f"  hand {k}: chunked {100 * held[k].mean():5.1f}% of frames held, against "
+        print(f"  {hands[k].name:>6}: chunked {100 * held[k].mean():5.1f}% of frames held, against "
               f"{100 * share:5.1f}% for the best single base "
               f"({cell[0]:+.2f}, {cell[1]:+.2f}, {cell[2]:+.2f})")
 
     if a.out:
-        out = dict(dataset=str(a.dataset), episode=int(ep), robot=a.robot, window=a.window,
+        out = dict(dataset=str(a.dataset), episode=int(ep.index), robot=a.robot,
+                   window=a.window, hands=[h.name for h in hands],
                    pos_tol=a.pos_tol, rot_tol_deg=a.rot_tol, height=a.height,
                    chunks=[dict(start=ch.start, stop=ch.stop,
                                 bases=[[round(float(v), 4) for v in b] for b in ch.bases],
@@ -64,14 +81,14 @@ def cmd_plan(a):
 
 
 def cmd_curve(a):
-    chain = load(a.robot)
+    chain = load_robot(a.robot)
     ep, hands = _load(a)
     cells = _grid(a)
-    print(f"episode {ep}: how much survives, against how long one base must serve\n")
+    print(f"episode {ep.index}: how much survives, against how long one base must serve\n")
     print(f"  {'window':>12} {'usable':>8} {'placements':>12}")
-    for k, (p, q, _) in enumerate(hands):
-        F = feasibility(chain, p, q, cells, a.pos_tol, np.radians(a.rot_tol))
-        print(f"  hand {k}:")
+    for h in hands:
+        F = feasibility(chain, h.pos, h.quat, cells, a.pos_tol, np.radians(a.rot_tol))
+        print(f"  {h.name}:")
         for row in yield_curve(F, cells):
             w = "whole episode" if row["window"] is None else f"{row['window']} frames"
             print(f"  {w:>12} {100 * row['usable']:7.1f}% "
@@ -79,21 +96,21 @@ def cmd_curve(a):
 
 
 def cmd_map(a):
-    chain = load(a.robot)
+    chain = load_robot(a.robot)
     ep, hands = _load(a)
     cells = _grid(a)
     lo, hi = (0, None)
     if a.frames:
         lo, hi = (int(v) if v else None for v in a.frames.split(":"))
-    for k, (p, q, _) in enumerate(hands):
-        p, q = p[lo:hi], q[lo:hi]
+    for h in hands:
+        p, q = h.pos[lo:hi], h.quat[lo:hi]
         if not a.frames:
             print("\nNote: scoring the WHOLE episode. One base rarely serves a whole "
                   "demonstration -- that is the problem this library exists for. Use "
                   "--frames a:b to score one chunk, or `omnibase plan` to cut the episode up.")
         smap = score_map(chain, p, q, cells, a.pos_tol, np.radians(a.rot_tol))
         cell, i, report = best_spot(smap)
-        print(f"\nhand {k}, episode {ep}: stand at {report}")
+        print(f"\n{h.name}, episode {ep.index}: stand at {report}")
         for name, why in SCORE_TERMS.items():
             print(f"    {name:<15} {smap[name][i]:.3f}   {why}")
         counts = {v: int((smap["verdict"] == v).sum()) for v in
@@ -103,7 +120,12 @@ def cmd_map(a):
 
 
 def cmd_robot(a):
-    print(describe(load(a.robot)))
+    print(describe(load_robot(a.robot)))
+
+
+def cmd_data(a):
+    """What is in a dataset, and whether OmniBase can use it. Run this first."""
+    print(describe_dataset(a.dataset, column=a.column, chain=load_robot(a.robot)))
 
 
 def main(argv=None):
@@ -115,8 +137,12 @@ def main(argv=None):
         if data:
             q.add_argument("dataset")
             q.add_argument("--episode", type=int, default=None)
-            q.add_argument("--hands", default="0")
-            q.add_argument("--width", type=int, default=8)
+            q.add_argument("--hands", default=None,
+                           help="which hands, by name (right,left) or index. Default: all of "
+                                "them. `omnibase data <path>` lists what a dataset has.")
+            q.add_argument("--column", default="action",
+                           choices=("action", "observation.state"),
+                           help="commanded poses or measured ones")
         q.add_argument("--robot", default="so101")
         q.add_argument("--window", type=int, default=21,
                        help="frames one base must cover: your policy's observation buffer plus "
@@ -144,6 +170,10 @@ def main(argv=None):
                    choices=("score", "coverage", "limit_margin", "manipulability", "rot_margin"),
                    help="which component to draw")
     q.set_defaults(func=cmd_map)
+
+    q = sub.add_parser("data", help="what a dataset holds, and whether it can be used")
+    common(q)
+    q.set_defaults(func=cmd_data)
 
     q = sub.add_parser("robot", help="print a built-in arm, to check it reads right")
     common(q, data=False)

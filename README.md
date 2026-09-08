@@ -63,7 +63,7 @@ pip install -e .
 ```
 
 Requires Python 3.9+, numpy and scipy. `pandas` and `pyarrow` are only needed if you load
-LeRobot-style parquet through `omnibase.from_parquet`.
+LeRobot datasets through `omnibase.load`.
 
 ---
 
@@ -76,8 +76,8 @@ The library only ever needs two arrays per hand: `pos` (N, 3) in metres and `qua
 import omnibase as ob
 
 chain = ob.so101()                                    # or build your own, see below
-_, hands = ob.from_parquet("datasets/mine", episode=6)
-pos, quat, grip = hands[0]
+ep    = ob.load("datasets/mine", episode=6)           # LeRobot v2.1 or v3.0
+pos, quat = ep.hands[0].pos, ep.hands[0].quat
 
 cells  = ob.base_grid(span=0.42, step=0.02, height=0.08)
 F      = ob.feasibility(chain, pos, quat, cells)
@@ -93,18 +93,56 @@ Pass several hands at once and they share one set of chunk boundaries — they a
 recording, and a cut that lands mid-reach for the other hand is not a cut you can use:
 
 ```python
-Fs = [ob.feasibility(chain, p, q, cells) for p, q, _ in hands]
+Fs = [ob.feasibility(chain, h.pos, h.quat, cells) for h in ep.hands]
 chunks, held = ob.chunk(Fs, cells, window=21)
 ```
+
+### LeRobot datasets
+
+Both on-disk layouts are read, and both kinds of action column:
+
+| | |
+|---|---|
+| **v2.1** | one parquet per episode, `data/chunk-000/episode_000000.parquet` |
+| **v3.0** | episodes concatenated, `data/chunk-000/file-000.parquet`, sliced by `episode_index` |
+| **end-effector poses** | columns named `<hand>_x, _y, _z, _qx, _qy, _qz, _qw` (+ optional gripper) |
+| **joint angles** | columns named after a robot's joints — pass `chain=` and they are run through forward kinematics |
+
+Columns are matched by the names in `meta/info.json`, not by position, so three hands, or a
+gripper column in an odd place, or no gripper at all, all read correctly. Check what a dataset
+holds before planning against it:
+
+```bash
+python -m omnibase data datasets/mine
+```
+```
+  codebase v3.0  fps 30  episodes 16
+  action   shape [16]  names ['right_x', 'right_y', ... 'left_qw', 'left_jaw']
+  -> hand 'right': 249 frames, pose, gripper column found
+  -> hand 'left':  249 frames, pose, gripper column found
+```
+
+Joint-space datasets are readable but are usually the *wrong input*: they came off a robot that
+already had a base, so there is nothing to place, and OmniBase will correctly report 100%
+reachable at every window length. They are useful for asking where that robot *should* have
+stood, or for treating one robot's recording as a source for a different arm.
+
+If your data is not LeRobot at all, skip the loader — the library only ever needs `pos` (N, 3)
+and `quat` (N, 4) as `(x, y, z, w)` in one fixed world frame.
 
 ### Command line
 
 ```bash
-python -m omnibase plan  datasets/mine --episode 6 --hands 0,1 --out plan.json
+python -m omnibase data  datasets/mine                  # what is in here, and can it be used?
+python -m omnibase plan  datasets/mine --episode 6 --out plan.json
 python -m omnibase curve datasets/mine --episode 6      # is this idea worth anything on my data?
 python -m omnibase map   datasets/mine --episode 6 --frames 0:112
 python -m omnibase robot so101                          # check the arm reads right
 ```
+
+`--hands` takes names or indices (`--hands right`, `--hands 0,1`); the default is every hand in
+the episode. `--column observation.state` reads what was measured instead of what was
+commanded.
 
 ---
 
@@ -220,7 +258,9 @@ angles.
 ## Tests
 
 ```bash
-python tests/test_omnibase.py       # or: python -m pytest
+python tests/test_omnibase.py       # kinematics, chunking, scoring
+python tests/test_data.py           # LeRobot loading -- builds its own datasets in a temp dir
+# or, both:  python -m pytest
 ```
 
 The ones that matter are the two that could pass while being wrong: inverse kinematics that

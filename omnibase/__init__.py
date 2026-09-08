@@ -7,8 +7,8 @@ it, and choose it again whenever it stops working.
     import omnibase as ob
 
     chain = ob.so101()                                   # or build your own Chain
-    _, hands = ob.from_parquet("datasets/mine", episode=6)
-    pos, quat, _ = hands[0]
+    ep = ob.load("datasets/mine", episode=6)          # LeRobot v2.1 or v3.0
+    pos, quat = ep.hands[0].pos, ep.hands[0].quat
 
     cells = ob.base_grid(span=0.42, step=0.02, height=0.08)
     F = ob.feasibility(chain, pos, quat, cells)
@@ -20,16 +20,18 @@ it, and choose it again whenever it stops working.
 numpy and scipy only. No simulator.
 """
 from .chain import Chain, Joint
-from .data import from_parquet, normalise_quats
+from .data import Episode, Hand, describe_dataset, from_parquet, load, normalise_quats
 from .plan import (SCORE_TERMS, Chunk, ascii_map, base_grid, best_fixed, best_spot, chunk,
                    feasibility, score_map, yield_curve)
-from .robots import describe, load, so101
+from .robots import describe, so101
+from .robots import load as load_robot   # ob.load is the DATASET loader
 
 __version__ = "0.1.0"
 __all__ = [
     "Chain", "Joint", "Chunk",
     "base_grid", "best_fixed", "chunk", "feasibility", "yield_curve",
     "score_map", "best_spot", "ascii_map", "SCORE_TERMS",
-    "so101", "load", "describe",
+    "so101", "load_robot", "describe",
+    "load", "describe_dataset", "Episode", "Hand",
     "from_parquet", "normalise_quats",
 ]
