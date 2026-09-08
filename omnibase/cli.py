@@ -14,14 +14,19 @@ import numpy as np
 
 from .data import describe_dataset, load
 from .plan import (SCORE_TERMS, arm_bases, ascii_map, base_grid, best_fixed, best_spot,
-                   chunk, feasibility, mount_feasibility, mount_grid, pair, score_map,
-                   yield_curve)
+                   chunk, feasibility, home_share, mount_feasibility, mount_grid, pair,
+                   score_map, yield_curve)
 from .robots import describe
 from .robots import load as load_robot
 
 
 def _grid(a):
     return base_grid(span=a.span, step=a.step, height=a.height)
+
+
+def _home(a):
+    """Where the robot really stands, if the caller said."""
+    return None if not a.home else [float(v) for v in a.home.split(",")]
 
 
 def _mount(a, hands):
@@ -74,12 +79,12 @@ def cmd_plan(a):
         combined, per = mount_feasibility(chain, [(h.pos, h.quat) for h in hands], mount, cells,
                                           a.pos_tol, np.radians(a.rot_tol))
         # One placement to choose, not one per arm: the assembly's.
-        Fs, chunks, held = per, *chunk([combined], cells, window=a.window)
+        Fs, chunks, held = per, *chunk([combined], cells, window=a.window, home=_home(a))
         print(f"  rigid pair, {a.pair:.3f} m apart -- placing the assembly, not the arms")
     else:
         Fs = [feasibility(chain, h.pos, h.quat, cells, a.pos_tol, np.radians(a.rot_tol))
               for h in hands]
-        chunks, held = chunk(Fs, cells, window=a.window)
+        chunks, held = chunk(Fs, cells, window=a.window, home=_home(a))
 
     print(f"\n{len(chunks)} chunk(s); "
           f"{'the assembly moves' if mount is not None else 'the bases move'} "
@@ -98,6 +103,14 @@ def cmd_plan(a):
                               for k, (b, h) in enumerate(zip(ch.bases, ch.held)))
         print(f"  chunk {i}: frames {ch.start:4d}-{ch.stop:4d} ({len(ch):4d})  {bits}")
 
+    if a.home:
+        share = home_share(chunks, ep.frames)
+        print(f"\n  at the real base: "
+              + ", ".join(f"{hands[k].name if mount is None else 'assembly'} "
+                          f"{100 * s:.1f}% of frames"
+                          for k, s in enumerate(share)))
+        print("  the rest are retargeted somewhere your robot does not stand -- still training "
+              "data, but\n  a claim about a different geometry. Chunk.at_home says which.")
     print()
     if mount is not None:
         cell, share = best_fixed(combined, cells)
@@ -200,6 +213,11 @@ def main(argv=None):
             q.add_argument("--column", default="action",
                            choices=("action", "observation.state"),
                            help="commanded poses or measured ones")
+            q.add_argument("--home", default=None, metavar="X,Y,Z",
+                           help="where the robot ACTUALLY stands. Given it, the real base is "
+                                "used wherever it works and left only where it cannot, coming "
+                                "back at the first frame it can serve again. Frames retargeted "
+                                "to it need no explanation at deployment.")
             q.add_argument("--pair", type=float, default=None, metavar="METRES",
                            help="the two arms are rigidly coupled this far apart -- a torso, a "
                                 "humanoid, one base plate. Places the assembly instead of the "

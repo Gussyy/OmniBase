@@ -243,6 +243,78 @@ def test_mount_yaw_turns_the_whole_assembly():
     assert np.array_equal(plain, rot), "mount yaw does not agree with rotating the scene"
 
 
+def _reachable_path(ch, base, n=60):
+    """A trajectory built so that one known base can hold all of it."""
+    rng = np.random.default_rng(7)
+    q = np.zeros((n, ch.n))
+    t = np.linspace(0, 1, n)
+    for j in range(ch.n):
+        lo, hi = ch.limits[j] * 0.55
+        q[:, j] = (lo + hi) / 2 + (hi - lo) / 2 * np.sin(2 * np.pi * (t + rng.random()))
+    pos, M = ch.fk(q)
+    return pos + np.asarray(base), R.from_matrix(M).as_quat()
+
+
+def test_home_base_is_used_whenever_it_works():
+    """The robot has a base. Use it wherever it can do the job; leave only where it cannot."""
+    ch = ob.so101()
+    home = np.array([0.10, -0.04, 0.08])
+    pos, quat = _reachable_path(ch, home)
+    cells = ob.base_grid(span=0.24, step=0.04, height=0.08, centre=(0.10, -0.04))
+    F = ob.feasibility(ch, pos, quat, cells)
+
+    hi = ob.home_index(cells, home)
+    assert np.allclose(cells[hi], home), "home must snap to the candidate that IS home"
+    assert F[:, hi].mean() > 0.95, "the fixture is wrong: home should hold this path"
+
+    chunks, held = ob.chunk([F], cells, window=21, home=home)
+    assert all(c.at_home[0] for c in chunks), "home works throughout and was not used"
+    assert ob.home_share(chunks, len(pos))[0] > 0.95
+    assert len(chunks) == 1, "no reason to ever move, so there should be one chunk"
+
+
+def test_home_is_reclaimed_as_soon_as_it_can_be():
+    """Having left home, come back at the first frame home can serve -- not merely when the
+    stand-in fails. Without that the robot stays parked somewhere invented long after it could
+    have gone back, and invented placements are the ones you have to justify."""
+    ch = ob.so101()
+    home = np.array([0.10, -0.04, 0.08])
+    pos, quat = _reachable_path(ch, home)
+    # Push a stretch of the path far away, so home cannot serve those frames.
+    pos = pos.copy()
+    pos[20:32] += np.array([0.16, 0.0, 0.0])
+    cells = ob.base_grid(span=0.28, step=0.04, height=0.08, centre=(0.10, -0.04))
+    F = ob.feasibility(ch, pos, quat, cells)
+    hi = ob.home_index(cells, home)
+    assert not F[20:32, hi].all(), "the fixture is wrong: home should fail on that stretch"
+
+    chunks, _ = ob.chunk([F], cells, window=5, home=home)
+    share = ob.home_share(chunks, len(pos))[0]
+    free = ob.home_share(ob.chunk([F], cells, window=5)[0], len(pos))[0]
+    assert share > free, "home preference bought nothing"
+    # Every frame home could have served, while not at home, is a frame we came back too late.
+    at_home = np.zeros(len(pos), dtype=bool)
+    for c in chunks:
+        at_home[c.start:c.stop] = c.at_home[0]
+    late = (~at_home) & F[:, hi]
+    assert late.sum() <= 5, f"{int(late.sum())} frames stayed away while home was usable"
+
+
+def test_home_preference_still_never_loses_to_standing_still():
+    """Preferring home must not cost coverage: it is a tie-break, not a handicap."""
+    ch = ob.so101()
+    home = np.array([0.10, -0.04, 0.08])
+    pos, quat = _reachable_path(ch, home)
+    pos = pos.copy()
+    pos[25:45] += np.array([0.14, 0.06, 0.0])
+    cells = ob.base_grid(span=0.28, step=0.04, height=0.08, centre=(0.10, -0.04))
+    F = ob.feasibility(ch, pos, quat, cells)
+    _, fixed = ob.best_fixed(F, cells)
+    for window in (5, 21, len(pos)):
+        _, held = ob.chunk([F], cells, window=window, home=home)
+        assert held.mean() >= fixed - 1e-9, f"window {window}: {held.mean():.3f} < {fixed:.3f}"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

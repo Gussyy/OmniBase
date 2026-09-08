@@ -39,6 +39,8 @@ class Chunk:
     stop: int
     bases: list                       # one (3,) placement per arm
     held: list = field(default_factory=list)   # fraction of frames each arm can hold
+    #: Whether each arm is standing where it really stands, rather than somewhere invented.
+    at_home: list = field(default_factory=list)
 
     def __len__(self):
         return self.stop - self.start
@@ -71,6 +73,24 @@ def feasibility(chain, pos, quat, cells, pos_tol=0.015, rot_tol=np.radians(20.0)
     return F
 
 
+def home_index(cells, home):
+    """Which candidate placement is the real robot's own base.
+
+    Accepts an index, or a coordinate that is snapped to the nearest candidate -- a real
+    mounting is never exactly on your grid, and refusing it over a millimetre would be silly.
+    """
+    if home is None:
+        return None
+    cells = np.asarray(cells, dtype=float)
+    if np.isscalar(home):
+        return int(home)
+    h = np.asarray(home, dtype=float).ravel()
+    d = np.linalg.norm(cells[:, :3] - h[:3], axis=1)
+    if cells.shape[1] > 3 and h.size > 3:            # match the mount heading too, if given
+        d = d + np.abs(np.arctan2(np.sin(cells[:, 3] - h[3]), np.cos(cells[:, 3] - h[3])))
+    return int(d.argmin())
+
+
 def _runs(F):
     """``run[f, c]`` = first frame at or after f that cell c cannot hold. One backward sweep."""
     n, m = F.shape
@@ -81,7 +101,7 @@ def _runs(F):
     return run
 
 
-def chunk(Fs, cells, window=21, slack=None):
+def chunk(Fs, cells, window=21, slack=None, home=None):
     """Cut the episode into runs, one base placement per arm per run.
 
     Args:
@@ -92,6 +112,13 @@ def chunk(Fs, cells, window=21, slack=None):
             length. It is the whole lever.
         slack: when several placements last nearly as long as the best, prefer the one nearest
             where we already are. Defaults to ``window // 2`` frames of slack.
+        home: where the robot actually stands -- an index into ``cells``, or a coordinate that
+            gets snapped to the nearest one, or one per arm. Given it, the real base is used
+            wherever it works and departed from only where it does not, returning as soon as it
+            can. This is usually what you want: your robot has a base, and frames retargeted to
+            it need no explanation at deployment, while frames retargeted somewhere invented are
+            a claim about a robot standing where yours does not. ``Chunk.at_home`` says which is
+            which, so you can weight or filter on it later.
 
     Returns:
         ``(chunks, feasible)`` -- a list of :class:`Chunk`, and an (arms, frames) mask of what
@@ -106,12 +133,25 @@ def chunk(Fs, cells, window=21, slack=None):
     n = Fs[0].shape[0]
     slack = window // 2 if slack is None else slack
     runs = [_runs(F) for F in Fs]
+    homes = home if isinstance(home, (list, tuple)) and len(home) == len(Fs) else [home] * len(Fs)
+    homes = [home_index(cells, h) for h in homes]
+    # Where home could serve a whole window, per frame. Used to cut a displaced run short the
+    # moment the real base becomes usable again -- without this, home is only reconsidered when
+    # the stand-in fails, and the robot stays parked somewhere invented long after it could
+    # have gone back.
+    home_ok = [None if h is None else ((runs[a][np.arange(n), h] - np.arange(n))
+                                       >= np.minimum(window, n - np.arange(n)))
+               for a, h in enumerate(homes)]
 
-    def choose(F, run, f, cur):
+    def choose(F, run, f, cur, home_i):
         """The cell to stand on from frame f, and the frame it stops working."""
         span = min(window, n - f)
         reach = run[f] - f
         ok = reach >= span
+        # The real base first, whenever it can do the job. Not the longest-lasting placement,
+        # not the nearest one -- a robot that already exists standing where it already stands.
+        if home_i is not None and ok[home_i]:
+            return home_i, int(run[f][home_i])
         if not ok.any():
             # Nothing can hold the whole window. Take the placement that holds the MOST of it,
             # not the one with the longest unbroken run -- those are different cells, and
@@ -135,7 +175,12 @@ def chunk(Fs, cells, window=21, slack=None):
     while f < n:
         picks, stops = [], []
         for a, run in enumerate(runs):
-            c, stop = choose(Fs[a], run, f, cur[a])
+            c, stop = choose(Fs[a], run, f, cur[a], homes[a])
+            if homes[a] is not None and c != homes[a]:
+                # Standing somewhere invented: come back as soon as home can take over.
+                back = np.flatnonzero(home_ok[a][f + 1:stop])
+                if back.size:
+                    stop = f + 1 + int(back[0])
             picks.append(c)
             stops.append(stop)
         stop = max(f + 1, min(stops))          # the run ends as soon as ANY arm must move
@@ -147,12 +192,29 @@ def chunk(Fs, cells, window=21, slack=None):
 
     feas = np.zeros((len(Fs), n), dtype=bool)
     for ch in chunks:
-        ch.held = []
+        ch.held, ch.at_home = [], []
         for a, b in enumerate(ch.bases):
             c = int(np.where((cells == b).all(1))[0][0])
             feas[a, ch.start:ch.stop] = Fs[a][ch.start:ch.stop, c]
             ch.held.append(float(feas[a, ch.start:ch.stop].mean()))
+            ch.at_home.append(homes[a] is not None and c == homes[a])
     return chunks, feas
+
+
+def home_share(chunks, frames=None):
+    """Fraction of frames that were served from the robot's own base, per arm.
+
+    The number to watch when you have a real robot. Frames at home are directly deployable --
+    same geometry, nothing to justify. Frames elsewhere are still useful training data, but they
+    describe a robot standing where yours does not, and it is worth knowing how much of your set
+    that is before you train on it.
+    """
+    if not chunks:
+        return []
+    arms = len(chunks[0].bases)
+    total = frames or sum(len(c) for c in chunks)
+    return [sum(len(c) for c in chunks if c.at_home and c.at_home[a]) / max(total, 1)
+            for a in range(arms)]
 
 
 def best_fixed(F, cells):

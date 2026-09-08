@@ -147,6 +147,44 @@ Mount yaw is a real degree of freedom in a way a single arm's is not: turning on
 own base is something its shoulder joint absorbs, but turning a torso swings the far arm through
 an arc and changes what it can reach.
 
+### Your robot already has a base
+
+Everything above treats the placement as free. It is free in the *data* — but if you own the
+robot, one placement is worth more than the others: the one it actually stands at. Frames
+retargeted there need no explanation at deployment. Frames retargeted somewhere invented are
+still training data, but they describe a robot standing where yours does not.
+
+So say where it stands, and the real base is used wherever it works and left only where it
+cannot — returning at the first frame it can serve again:
+
+```python
+chunks, held = ob.chunk([F], cells, window=21, home=(0.10, -0.04, 0.08))
+print(ob.home_share(chunks))            # fraction of frames served from the real base
+for c in chunks:
+    print(c.start, c.stop, "home" if c.at_home[0] else "moved", c.bases[0].round(3))
+```
+
+```bash
+python -m omnibase plan datasets/mine --episode 6 --pair 0.46 --home=-0.10,0.06,0.08
+```
+
+On the two-handed can data with the arms rigidly coupled, that is free improvement in both
+directions at once:
+
+| | frames held | at the real base |
+|---|---|---|
+| placement free to wander | 43.0% | 0% |
+| **home first** | **46.2%** | **20.9%** |
+
+It holds *more* while standing in the right place *more often*, because preferring home is a
+tie-break rather than a handicap — a test pins that it can never score below simply standing
+still. `Chunk.at_home` marks which chunks are which, so you can weight or filter on it when you
+build a training set.
+
+Coming back promptly is the part that matters. Only re-checking home when the stand-in fails
+leaves the robot parked somewhere invented long after it could have gone back; here that was
+the difference between 0% and 20.9%.
+
 ### LeRobot datasets
 
 Both on-disk layouts are read, and both kinds of action column:

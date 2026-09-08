@@ -22,7 +22,8 @@ numpy and scipy only. No simulator.
 from .chain import Chain, Joint
 from .data import Episode, Hand, describe_dataset, from_parquet, load, normalise_quats
 from .plan import (SCORE_TERMS, Chunk, Mount, arm_bases, ascii_map, base_grid,
-                   best_fixed, best_spot, chunk, feasibility, mount_feasibility,
+                   best_fixed, best_spot, chunk, feasibility, home_index,
+                   home_share, mount_feasibility,
                    mount_grid, pair, score_map, yield_curve)
 from .robots import describe, so101
 from .robots import load as load_robot   # ob.load is the DATASET loader
@@ -33,6 +34,7 @@ __all__ = [
     "base_grid", "best_fixed", "chunk", "feasibility", "yield_curve",
     "score_map", "best_spot", "ascii_map", "SCORE_TERMS",
     "Mount", "pair", "mount_grid", "mount_feasibility", "arm_bases",
+    "home_index", "home_share",
     "so101", "load_robot", "describe",
     "load", "describe_dataset", "Episode", "Hand",
     "from_parquet", "normalise_quats",
