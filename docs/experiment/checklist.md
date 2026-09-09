@@ -18,7 +18,7 @@ Ticked as things land. Times are local. Companion to `2026-09-09_fastumi_so101_s
 ## Next (automatic unless marked *manual*)
 
 - [ ] **Re-sweep finishes** (`RESWEEP DONE` in `E:\data\fastumi\resweep.log`, ~01:45) — record per-task chunked vs fixed yields in the log §10 *(manual)*
-- [ ] Writer records the camera picture as a median, not a union, before the export runs *(manual, now)*
+- [x] Writer records the camera picture as a median, not a union, before the export runs (23:58)
 - [ ] **Export** `so101_omnibase2` and `so101_fixed2` from `plans2` (can with `--tcp 0.0748`, ×8 repeats)
 - [ ] **Verifier passes** on both (FK ≤15 mm/20°, rows, clips, stats)
 - [ ] Check `meta/omnibase.json` ellipse ≈ 0.37 × 0.374 on both *(manual)*

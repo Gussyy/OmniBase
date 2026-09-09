@@ -84,7 +84,7 @@ def slice_video(src, dst, start, stop, stride, fps, size, crf=23, offset=0):
            f"slice frames {start}-{stop} of {Path(src).name}")
 
 
-def first_frame(path, size, lit=18):
+def first_frame(path, size, lit=40):
     """One decoded frame: channel statistics, and where the picture actually is.
 
     LeRobot refuses to normalise a camera it has no statistics for, and computing them properly
@@ -106,8 +106,12 @@ def first_frame(path, size, lit=18):
         return None
     img = px[: h * w * 3].reshape(h, w, 3)
     flat = img.reshape(-1, 3).astype(np.float64) / 255.0
-    ys, xs = np.nonzero(img.max(axis=2) > lit)
-    box = None if not len(xs) else (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
+    # Rows and columns where at least 2% of the pixels are lit, not the extreme lit pixel: a
+    # fisheye's vignette and a few bright specks in the black would otherwise stretch the box to
+    # the frame -- measured, they did, to the full width. 40/255 is where the vignette ends.
+    g = img.max(axis=2) > lit
+    rows, cols = np.flatnonzero(g.mean(axis=1) > 0.02), np.flatnonzero(g.mean(axis=0) > 0.02)
+    box = None if not (len(rows) and len(cols)) else (int(cols[0]), int(rows[0]), int(cols[-1]), int(rows[-1]))
     return dict(mean=flat.mean(0), sq=(flat * flat).mean(0), min=flat.min(0), max=flat.max(0),
                 box=box)
 
@@ -133,7 +137,7 @@ class Writer:
         self.video_key, self.size, self.robot_type = video_key, tuple(size), robot_type
         self.episodes, self.tasks, self.frames = [], {}, 0
         self._acc = {}
-        self._box = None
+        self._boxes = []          # one lit box per episode; the ellipse is their median, not their union
 
     def add(self, state, action, task, video, extra=None):
         """One episode: ``(n, d)`` states and actions, a language string, a finished clip.
@@ -171,10 +175,7 @@ class Writer:
             st["min"] = img["min"] if st["min"] is None else np.minimum(st["min"], img["min"])
             st["max"] = img["max"] if st["max"] is None else np.maximum(st["max"], img["max"])
             if img.get("box"):
-                b = img["box"]
-                self._box = b if self._box is None else (
-                    min(self._box[0], b[0]), min(self._box[1], b[1]),
-                    max(self._box[2], b[2]), max(self._box[3], b[3]))
+                self._boxes.append(img["box"])
         return idx
 
     def _fold(self, key, a):
@@ -312,14 +313,18 @@ class Writer:
         # dataset's view at deployment. LeRobot warns about keys it does not know, and it is
         # right to -- this is OmniBase's business, not the format's.
         extra = dict(camera=self.video_key, size=list(self.size))
-        if self._box:
-            x0, y0, x1, y1 = self._box
+        if self._boxes:
+            # The median over episodes. A union grows to the frame on one source that fills its
+            # rectangle or one bright speck; a policy then gets shown twice the picture it saw.
+            x0, y0, x1, y1 = np.median(np.asarray(self._boxes, dtype=float), axis=0)
             w, h = self.size
             extra["ellipse"] = [round((x0 + x1) / 2 / w, 4), round((y0 + y1) / 2 / h, 4),
                                 round((x1 - x0) / 2 / w, 4), round((y1 - y0) / 2 / h, 4)]
             extra["ellipse_note"] = ("centre and radii as fractions of the frame: where the "
-                                     "lens's picture actually is. Mask a rendered camera to "
-                                     "this before showing it to a policy trained here.")
+                                     "lens's picture actually is, as the median over episodes' "
+                                     "first frames. Mask a rendered camera to this before "
+                                     "showing it to a policy trained here.")
+            extra["ellipse_episodes"] = len(self._boxes)
         (self.root / "meta/omnibase.json").write_text(json.dumps(extra, indent=1),
                                                       encoding="utf-8")
         return self.root
