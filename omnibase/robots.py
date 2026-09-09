@@ -47,6 +47,20 @@ SO101_JOINTS = [
 #: wrong shifts every reachability answer by however far out it is.
 SO101_TOOL = (0.0, -0.0748, 0.0)
 
+#: The direction the jaws REACH, in the same frame. Not the tool offset, and not its negation
+#: either -- the two are perpendicular in intent even though they share an axis here. The offset
+#: says where the jaw bodies sit relative to the gripper's origin; this says which way they open
+#: onto the world.
+#:
+#: Measured, because reading it off the offset gets it backwards: this asset's jaw bodies sit
+#: above their base at local -y, and the gripper grasps by descending, so the mouth faces local
+#: +y. Confirmed against a recording of the gripper picking a can off a table -- at the moment
+#: the jaws close, +y points at the table and -y at the ceiling.
+#:
+#: If you add an arm, measure this for it too. A sign error here does not fail loudly: every
+#: pose comes back "unreachable" and the data looks like the problem.
+SO101_APPROACH = (0.0, 1.0, 0.0)
+
 
 def so101():
     """The SO-ARM101 arm with its parallel gripper."""

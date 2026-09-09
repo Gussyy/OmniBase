@@ -96,6 +96,20 @@ def feasibility(chain, pos, quat, cells, pos_tol=0.015, rot_tol=np.radians(20.0)
     return F
 
 
+def solve(chain, pos, quat, base, pos_tol=0.015, rot_tol=np.radians(20.0)):
+    """Joint angles for ONE base placement: ``(q, ok)``.
+
+    :func:`feasibility` throws the angles away -- it answers a yes/no question over thousands of
+    placements at once, and keeping ``q`` for every one of them is gigabytes. Once a placement
+    has been chosen, ask again here and keep what comes back. Same solver, same tolerances, so
+    ``ok`` is exactly the column :func:`feasibility` computed for that cell.
+    """
+    Rt = R.from_quat(np.asarray(quat, dtype=float)).as_matrix()
+    rel = np.asarray(pos, dtype=float) - np.asarray(base, dtype=float)[:3]
+    q, pe, re = chain.ik(rel, Rt)
+    return q, (pe < pos_tol) & (re < rot_tol)
+
+
 def home_index(cells, home):
     """Which candidate placement is the real robot's own base.
 
