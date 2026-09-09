@@ -17,12 +17,13 @@ Ticked as things land. Times are local. Companion to `2026-09-09_fastumi_so101_s
 
 ## Next (automatic unless marked *manual*)
 
-- [ ] **Re-sweep finishes** (`RESWEEP DONE` in `E:\data\fastumi\resweep.log`, ~01:45) — record per-task chunked vs fixed yields in the log §10 *(manual)*
+- [x] Power cut 00:40 killed the sweep mid-task (it writes only at the end): relaunched 00:48 in 200-episode parts, pipeline6 made re-runnable (skips done stages, resumes training), `E:\data\out\resume_all.sh` restores everything after a reboot (00:55)
+- [ ] **Re-sweep finishes** (`RESWEEP DONE` in `E:\data\fastumi\resweep.log`, ~07:30 — the corrected frame solves 3.7× slower) — record per-task chunked vs fixed yields in the log §10 with `E:\data\out\sweep_table.py` *(manual)*
 - [x] Writer records the camera picture as a median, not a union, before the export runs (23:58)
 - [ ] **Export** `so101_omnibase2` and `so101_fixed2` from `plans2` (can with `--tcp 0.0748`, ×8 repeats)
 - [ ] **Verifier passes** on both (FK ≤15 mm/20°, rows, clips, stats)
 - [ ] Check `meta/omnibase.json` ellipse ≈ 0.37 × 0.374 on both *(manual)*
-- [ ] **Train `so101_omnibase2`** 32,500 steps (~5 h); checkpoints every 2,500; loss curve plotted *(manual: plot)*
+- [ ] **Train `so101_omnibase2`** 32,500 steps (~5 h, ~09:00→14:00); checkpoints every 2,500; loss curve plotted with `plot_loss.py OUT.png 2` *(manual: plot)*
 - [ ] **Preflight passes** at rollout (arm holds reset pose ≤2°)
 - [ ] **20 rollouts `so101_omnibase2`** (absolute angles, 8 averaged draws, frames dumped) → `eval_omnibase2.json`
 - [ ] Look at the dumped frames: object in view, fingers where expected *(manual)*

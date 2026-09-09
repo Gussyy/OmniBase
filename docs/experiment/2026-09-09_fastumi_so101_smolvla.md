@@ -234,6 +234,14 @@ above the table because every sweep placed it there; object = YCB `tomato_soup_c
 - A pause script must know every pipeline name; one that missed `pipeline4.sh` let it jump
   ahead and start a second server on the same port.
 - The verifier must average in float64; float32 over 256k rows drifts 0.02°.
+- `omnibase sweep` writes its plan only at the end. A power cut at 00:40 on 2026-09-10 threw
+  away 1.7 h of the 1,418-episode tableware task. The re-sweep now runs in parts of 200
+  episodes (`plans2/parts/`, merged by `merge_parts.py`), every pipeline stage skips itself once
+  its result exists, training resumes from its last checkpoint, and one command restores the
+  whole chain after a reboot: `bash E:\data\out\resume_all.sh`.
+- The corrected tool point costs solver time: with the jaws off the roll axis `chain.ik` runs
+  3.7× slower per solve (can_v3, identical 0.36 M solves: 251 s against 68 s), so the re-sweep
+  and the exports take 3.7× the first pass. Same answers, more seeds; posted to Ken.
 - Everything coordinated with Ken (the other agent) through `session.md`: claims per file,
   the feasibility-mask gate (protects the solver; the robot model change legitimately moves
   its reference), CPU/GPU windows, and a running log with real clock times.
@@ -241,14 +249,16 @@ above the table because every sweep placed it there; object = YCB `tomato_soup_c
 ## 9. What runs next (all queued, automatic)
 
 1. Re-sweep of the 3,307 selected episodes + can with the corrected frame:
-   `E:\data\fastumi\resweep.sh` → `plans2/`, running since 23:11, ~2.5 h.
+   `E:\data\fastumi\resweep.sh` → `plans2/`, in 200-episode parts, restarted 00:48 after the
+   power cut, ~6.5 h (the corrected frame solves 3.7× slower than the first pass).
 2. `E:\data\out\pipeline6.sh`: export `so101_omnibase2` and `so101_fixed2` from `plans2`,
    verify both, train `so101_omnibase2` 32,500 steps (~5 h), 20 rollouts with `--absolute`
    and 8 averaged draws, then the fixed twin at the same steps and its 20 rollouts.
 3. Regenerate `docs/FASTUMI_POC.md` tables from `plans2` and the new datasets; write the
    tomato-can result, cost, and "what this does not show".
 
-Rough ETA: corrected yields ~01:45, first rollout numbers ~08:00, twin's ~13:30.
+Rough ETA (revised 00:55 after the power cut): corrected yields ~07:30, exports ~09:00, first
+rollout numbers ~14:00, twin's ~19:30.
 
 If the rollouts still score 0, the levers inside the pipeline, in order: fine-tune the finished
 policy 3,000 steps on the 16 can episodes (`finetune.sh`, allowed by the rules), continue
@@ -274,7 +284,7 @@ Corrected yield table: pending (`plans2/`).
 | datasets (first pass / corrected) | `E:\data\out\so101_omnibase`, `so101_fixed` / `so101_omnibase2`, `so101_fixed2` |
 | checkpoints | `E:\data\out\train_<dataset>\checkpoints\` |
 | rollout results | `E:\data\out\eval_<label>.json`, frame dumps `dump_*` |
-| launchers | `E:\data\out\{train,eval,pipeline6,finetune,verify,plot_loss}.*`, `E:\data\fastumi\resweep.sh` |
+| launchers | `E:\data\out\{resume_all,run6,pipeline6,train,eval,finetune,verify,plot_loss,sweep_table}.*`, `E:\data\fastumi\{resweep.sh,merge_parts.py}` |
 | logs | `E:\data\fastumi\resweep.log`, `E:\data\out\pipeline6.log`, `train_*.log`, `server_*.log` |
 | offline diagnostics | `E:\data\out\offline_{check,chunk,noise,avg}.py`, `measure_circle.py` |
 | measurement scripts | `so101-scene/scripts/{joint_convention_check,playback_check,fk_check}.py` |
