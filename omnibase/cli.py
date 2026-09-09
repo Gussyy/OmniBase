@@ -539,6 +539,13 @@ def _export_one(job):
                 base = np.asarray(ch["bases"][a], dtype=float)
                 q, ok = solve(chain, hand.pos[s0:s1], hand.quat[s0:s1], base,
                               cfg["pos_tol"], np.radians(cfg["rot_tol"]))
+                # A step no arm could take in one frame ends the episode there rather than
+                # being written down. These are real -- the SO-101's wrist stops at -157 and
+                # +163 degrees, so a hand that rotates past the gap leaves the arm to unwind
+                # 320 the other way -- and both frames either side are honest solutions. What
+                # is not honest is the line between them, and a policy would learn the flick.
+                if c["max_step"] and len(q) > 1:
+                    ok[1:] &= np.abs(np.diff(np.degrees(q), axis=0)).max(1) <= c["max_step"]
                 for ri, (r0, r1) in enumerate(_runs(ok, c["min_frames"])):
                     qa = np.degrees(q[r0:r1])
                     g = hand.grip[s0 + r0:s0 + r1] if hand.grip is not None else np.zeros(r1 - r0)
@@ -631,7 +638,7 @@ def cmd_export(a):
     stage.mkdir(parents=True, exist_ok=True)
     w, h = (int(v) for v in a.size.lower().split("x"))
     cfg = dict(sources=sources, stage=str(stage), fps=a.fps, size=(w, h), crf=a.crf,
-               min_frames=a.min_frames, fixed_base=bool(a.fixed_base))
+               min_frames=a.min_frames, fixed_base=bool(a.fixed_base), max_step=a.max_step)
 
     jobs = [(i, rec) for i, d in enumerate(docs) for rec in d["episodes"]
             if "error" not in rec and (not a.fixed_base or rec.get("fixed_base"))]
@@ -674,7 +681,7 @@ def cmd_export(a):
     print(f"  per-frame joint step: median {np.median(jumps):.1f} deg, "
           f"p95 {np.percentile(jumps, 95):.1f}, worst {jumps.max():.1f}")
     if jumps.max() > 45:
-        print("  (a large worst-case step is the solver changing elbow branch between frames; "
+        print("  (a large worst-case step is the solver changing posture between frames; "
               "it shows up as a flick in one episode, not a wrong base)")
     for e in bad[:10]:
         print(f"  dropped: {e['error']}")
@@ -822,6 +829,10 @@ def main(argv=None):
     q.add_argument("--min-frames", type=int, default=20,
                    help="drop an exported run shorter than this: below the policy's action "
                         "chunk it is all padding")
+    q.add_argument("--max-step", type=float, default=60.0, metavar="DEG",
+                   help="end an episode where any joint would have to move more than this in "
+                        "one frame. Mostly the wrist unwinding through its own dead zone, "
+                        "which is a real motion and not one to train on. 0 keeps everything.")
     q.add_argument("--crf", type=int, default=23, help="x264 quality, lower is bigger")
     q.add_argument("--limit", type=int, default=None, help="only the first N episodes, to try it")
     q.add_argument("--workers", type=int, default=1, metavar="N")

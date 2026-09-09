@@ -96,18 +96,61 @@ def feasibility(chain, pos, quat, cells, pos_tol=0.015, rot_tol=np.radians(20.0)
     return F
 
 
-def solve(chain, pos, quat, base, pos_tol=0.015, rot_tol=np.radians(20.0)):
+def solve(chain, pos, quat, base, pos_tol=0.015, rot_tol=np.radians(20.0),
+          smooth=np.radians(60.0)):
     """Joint angles for ONE base placement: ``(q, ok)``.
 
     :func:`feasibility` throws the angles away -- it answers a yes/no question over thousands of
     placements at once, and keeping ``q`` for every one of them is gigabytes. Once a placement
     has been chosen, ask again here and keep what comes back. Same solver, same tolerances, so
     ``ok`` is exactly the column :func:`feasibility` computed for that cell.
+
+    One thing is added: continuity. The solver treats every frame as a fresh problem, which is
+    right for counting what an arm can reach and wrong for writing down what it should do. A
+    redundant joint has several ways to make the same pose, and picking each frame's
+    independently lets it jump between them -- measured on FastUMI, a 320 degree step in
+    wrist_roll between one frame and the next, in an episode where nothing else moved more than
+    fifteen. That is not a bad base, it is the same base described twice; but a policy trained
+    on it would learn to flick its wrist for no reason.
+
+    So where a step exceeds ``smooth``, that one frame is solved again starting from the
+    previous frame's answer, and the new answer is kept only if it still meets both tolerances
+    and actually moves less. Nothing is smoothed, nothing is interpolated: every frame returned
+    is a real solution to its own pose, and a genuinely large motion stays large.
     """
     Rt = R.from_quat(np.asarray(quat, dtype=float)).as_matrix()
     rel = np.asarray(pos, dtype=float) - np.asarray(base, dtype=float)[:3]
     q, pe, re = chain.ik(rel, Rt)
-    return q, (pe < pos_tol) & (re < rot_tol)
+    ok = (pe < pos_tol) & (re < rot_tol)
+    if smooth:
+        free = chain.free_joints()
+        for i in range(1, len(q)):
+            if not (ok[i] and ok[i - 1]):
+                continue
+            if np.abs(q[i] - q[i - 1]).max() <= smooth:
+                continue
+            # A free joint -- a wrist roll about the tool axis -- is swept for the best aim,
+            # independently every frame, so two nearly-tied rolls can swap between neighbours.
+            # It moves the tool point nowhere, so any value that still aims well enough is a
+            # legitimate answer to this frame: take the one nearest where the wrist already was.
+            for j in free:
+                grid = np.linspace(chain.limits[j, 0], chain.limits[j, 1], 145)
+                trial = np.tile(q[i], (len(grid), 1))
+                trial[:, j] = grid
+                _, re_g = chain.error(trial, np.tile(rel[i], (len(grid), 1)),
+                                      np.tile(Rt[i], (len(grid), 1, 1)))
+                good = np.flatnonzero(re_g < rot_tol)
+                if good.size:
+                    q[i, j] = grid[good[np.argmin(np.abs(grid[good] - q[i - 1, j]))]]
+            # Anything still jumping is a different arm posture rather than a different wrist:
+            # re-solve that one frame from where the arm already is, and keep the answer only
+            # if it holds both tolerances and actually moves less.
+            jump = np.abs(q[i] - q[i - 1]).max()
+            if jump > smooth:
+                qi, pi, ri = chain.ik(rel[i:i + 1], Rt[i:i + 1], seeds=[q[i - 1]])
+                if pi[0] < pos_tol and ri[0] < rot_tol and np.abs(qi[0] - q[i - 1]).max() < jump:
+                    q[i] = qi[0]
+    return q, ok
 
 
 def home_index(cells, home):
