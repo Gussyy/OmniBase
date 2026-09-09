@@ -31,6 +31,7 @@ pandas is imported lazily, so the rest of the library stays numpy-and-scipy.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -74,6 +75,29 @@ class Episode:
 def _info(root: Path):
     p = root / "meta" / "info.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+
+
+def episodes(path):
+    """Every episode index in a dataset, sorted. For sweeping a whole recording session.
+
+    Read from the metadata where there is any, and from the data itself where there is not --
+    v2.1 names the episode in each file, v3.0 puts it in a column.
+    """
+    root = Path(path)
+    n = _info(root).get("total_episodes")
+    if n:
+        return list(range(int(n)))
+    files = sorted(root.glob("data/**/*.parquet")) if root.is_dir() else [root]
+    named = sorted({int(m.group(1)) for f in files
+                    for m in [re.search(r"episode_(\d+)", f.name)] if m})
+    if named:
+        return named
+    import pandas as pd
+    seen = set()
+    for f in files:
+        df = pd.read_parquet(f, columns=["episode_index"]) if files else None
+        seen.update(int(v) for v in df["episode_index"].unique())
+    return sorted(seen)
 
 
 def _frame(root: Path, column: str, episode):

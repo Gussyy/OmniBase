@@ -315,6 +315,144 @@ def test_home_preference_still_never_loses_to_standing_still():
         assert held.mean() >= fixed - 1e-9, f"window {window}: {held.mean():.3f} < {fixed:.3f}"
 
 
+def _random_chain(n, seed, tool=(0.0, 0.0, 0.05)):
+    rng = np.random.default_rng(seed)
+    js = []
+    for i in range(n):
+        lo = rng.uniform(-2.6, -0.3)
+        js.append(Joint(tuple(rng.uniform(-0.12, 0.12, 3)),
+                        tuple(R.random(random_state=int(seed * 100 + i)).as_quat()),
+                        "xyz"[i % 3], lo, lo + rng.uniform(0.6, 4.0), f"j{i}"))
+    return Chain(js, tool=tool, name=f"r{n}s{seed}")
+
+
+def test_pruning_only_rejects_the_truly_unreachable():
+    """The prune must be a NECESSARY condition, not a good guess.
+
+    Everything the speed-ups rest on is this: `cannot_reach` says "no joint angles exist", and
+    the solver is then skipped. A single pose wrongly rejected is a pose this library reports as
+    beyond the arm when the arm can hold it -- the one error it exists to avoid. So: take poses
+    the arm demonstrably CAN hold, because forward kinematics just produced them, and require
+    that none is rejected.
+    """
+    for ch in [ob.so101()] + [_random_chain(n, s) for n, s in ((3, 1), (4, 2), (5, 3), (6, 4))]:
+        rng = np.random.default_rng(11)
+        q = rng.uniform(ch.limits[:, 0], ch.limits[:, 1], size=(600, ch.n))
+        pos, M = ch.fk(q)
+        assert not ch.cannot_reach(pos, M).any(), f"{ch.name} rejected a pose it just held"
+        # Widening the tolerances can only make more poses admissible, never fewer.
+        wide = ch.cannot_reach(pos, M, pos_tol=0.05, rot_tol=np.radians(45.0))
+        tight = ch.cannot_reach(pos, M, pos_tol=0.001, rot_tol=np.radians(2.0))
+        assert not wide.any() and (tight | ~wide).all()
+
+
+def test_pruning_agrees_with_solving_everything():
+    """On a real grid, the pruned sweep and the exhaustive one must give the SAME mask."""
+    ch = ob.so101()
+    t = np.linspace(0, 1, 40)
+    pos = np.stack([0.22 + 0.14 * np.cos(3 * t), 0.18 * np.sin(3 * t), 0.10 + 0.12 * t], -1)
+    quat = R.from_euler("y", (90 + 40 * np.sin(4 * t))[:, None], degrees=True).as_quat()
+    cells = ob.base_grid(span=0.30, step=0.06, height=0.08)
+    Rt = R.from_quat(quat).as_matrix()
+
+    fast = ob.feasibility(ch, pos, quat, cells)
+    slow = np.zeros_like(fast)
+    for i, b in enumerate(cells):                      # what the library did before pruning
+        _, pe, re = ch.ik(pos - b, Rt)
+        slow[:, i] = (pe < 0.015) & (re < np.radians(20.0))
+    assert np.array_equal(fast, slow), f"{int((fast != slow).sum())} entries differ"
+    assert 0 < fast.sum() < fast.size, "fixture proves nothing if everything is one answer"
+
+
+def test_envelope_fits_a_row_budget_on_any_arm():
+    """The precompute samples grid ** (variable joints). Left alone that is 60 GB on a 6-DoF arm.
+
+    It is coarsened to fit `Chain.ROWS` instead. That is safe rather than merely convenient: a
+    coarser grid only widens the slack, so the region stays a superset and the prune stays a
+    necessary condition -- which is what the assert below actually checks.
+    """
+    for n in (4, 5, 6, 7):
+        ch = _random_chain(n, seed=n)
+        free = set(ch.free_joints())
+        var = max(len([i for i in range(1, n) if i not in free]), 1)
+        env = ch.envelope()
+        if env["maps"]:                                # it built one, so it has to have fit
+            grid = max(3, min(96, int(ch.ROWS ** (1.0 / var))))
+            assert grid ** var <= 8 * ch.ROWS, f"n={n} built {grid ** var} sample rows"
+        rng = np.random.default_rng(5)
+        q = rng.uniform(ch.limits[:, 0], ch.limits[:, 1], size=(200, ch.n))
+        pos, M = ch.fk(q)
+        assert not ch.cannot_reach(pos, M).any(), f"n={n} coarse grid pruned a reachable pose"
+
+
+def test_the_three_by_three_solve_is_stable_where_the_solver_uses_it():
+    """`_chol3` is the inner solve, and it is only sound because A is positive definite.
+
+    Cramer's rule was tried here and looks identical on a good day: same speed, same mask on
+    real data. On ill-conditioned batches it gives 1.3e-07 backward error against this routine's
+    2.1e-16, and near-singular it returns nan -- which reads downstream as `pe < tol` being
+    False, i.e. "the arm cannot reach". This pins the difference so nobody swaps it back.
+    """
+    from omnibase.chain import _chol3
+    rng = np.random.default_rng(0)
+    for d in (1e-4, 0.05):                             # the two dampings ik() actually uses
+        U = rng.normal(size=(4000, 3, 3))
+        U[:, :, 2] = U[:, :, 0]                        # rank-deficient, the singular case
+        J = U @ np.swapaxes(U, -1, -2)
+        A = J @ np.swapaxes(J, -1, -2) + d ** 2 * np.eye(3)
+        v = rng.normal(size=(4000, 3, 1))
+        x = _chol3(A, v)
+        assert np.isfinite(x).all(), f"d={d}: non-finite solution"
+        err = (np.linalg.norm(A @ x - v, axis=(-2, -1))
+               / (np.linalg.norm(A, axis=(-2, -1)) * np.linalg.norm(x, axis=(-2, -1))))
+        assert err.max() < 1e-12, f"d={d}: backward error {err.max():.2e}"
+
+
+def test_free_joints_follows_the_chain_it_is_asked_about():
+    """It is derived from the limits, so the answer must track a change to them.
+
+    A memoised version was tried and answered for the chain as it was BUILT rather than as it
+    is. Below is the case that catches it: joint 0 spins the tool about its own axis, so it is a
+    free joint exactly when the rest of the chain keeps the tool on that axis. Widen joint 1 and
+    it stops being free; pin joint 1 and it starts. A cache gets the second answer wrong, and
+    silently -- `_polish_free` then skips a joint it should sweep, and the arm is reported unable
+    to aim somewhere it can. The memo was also measured at 0.98x, so it bought nothing.
+    """
+    # Joint 0 turns about z at the origin; the tool sits further up that same z axis.
+    j0 = Joint((0.0, 0.0, 0.0), (0, 0, 0, 1), "z", -2.0, 2.0, "roll")
+    j1 = Joint((0.0, 0.0, 0.1), (0, 0, 0, 1), "y", -1.0, 1.0, "pitch")
+    ch = Chain([j0, j1], tool=(0.0, 0.0, 0.1), name="probe")
+    assert 0 not in ch.free_joints(), "pitch swings the tool off the roll axis; not free"
+
+    ch.limits = ch.limits.copy()
+    ch.limits[1] = [0.0, 0.0]                      # pin the pitch: the tool is back on the axis
+    assert 0 in ch.free_joints(), "answered for the chain it was built with, not the one it has"
+
+
+def test_splitting_the_sweep_into_blocks_changes_nothing():
+    """`feasibility` walks frames in blocks so a long episode on a fine grid does not ask for
+    the whole (frames, cells, 3) product at once. The block size is a memory ceiling only, so
+    the mask must not depend on it -- including at a size that splits the episode many ways.
+    """
+    from omnibase import plan as P
+    ch = ob.so101()
+    t = np.linspace(0, 1, 55)
+    pos = np.stack([0.22 + 0.12 * np.cos(3 * t), 0.16 * np.sin(3 * t), 0.10 + 0.10 * t], -1)
+    quat = R.from_euler("y", (90 + 35 * np.sin(4 * t))[:, None], degrees=True).as_quat()
+    cells = ob.base_grid(span=0.24, step=0.06, height=0.08)
+
+    keep = P._PAIR_BATCH
+    try:
+        P._PAIR_BATCH = 10 ** 9                    # one block: the whole episode at once
+        whole = ob.feasibility(ch, pos, quat, cells)
+        for pairs in (len(cells), 3 * len(cells), 7 * len(cells)):
+            P._PAIR_BATCH = pairs                  # 55, 19 and 8 blocks respectively
+            assert np.array_equal(ob.feasibility(ch, pos, quat, cells), whole),                 f"block of {pairs} pairs changed the mask"
+    finally:
+        P._PAIR_BATCH = keep
+    assert 0 < whole.sum() < whole.size, "fixture proves nothing if everything is one answer"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -46,6 +46,14 @@ class Chunk:
         return self.stop - self.start
 
 
+#: Rows per inverse-kinematics call, and (frame, cell) pairs per pruning pass. Both are only
+#: memory ceilings: the solve is row-independent and the prune is pair-independent, so neither
+#: changes an answer. They keep a long episode on a fine grid from asking for the whole product
+#: at once -- 5000 frames x 1764 placements is 200 MB of target positions alone, per worker.
+_IK_BATCH = 150_000
+_PAIR_BATCH = 4_000_000
+
+
 def base_grid(span=0.42, step=0.02, height=0.08, centre=(0.0, 0.0)):
     """Candidate base placements: a square lattice at one height.
 
@@ -63,13 +71,28 @@ def feasibility(chain, pos, quat, cells, pos_tol=0.015, rot_tol=np.radians(20.0)
     Solved once, here, because everything downstream is set algebra on the answer. The
     orientations are converted a single time and reused for every cell -- moving the base only
     moves the target's position, never its heading.
+
+    Most of the pairs never reach the solver. Roughly three quarters of any real sweep is settled
+    by arithmetic first -- the target is outside the arm's reach envelope, or held at an angle
+    the wrist cannot make -- and :meth:`~omnibase.chain.Chain.cannot_reach` rejects those in
+    bulk. What survives is gathered into one solve rather than one per cell, so a placement with
+    four live frames does not cost what a placement with four hundred does. Neither step changes
+    the answer: the prune only ever rejects what is provably out of reach, and the solve treats
+    every row independently.
     """
     Rt = R.from_quat(np.asarray(quat, dtype=float)).as_matrix()
     pos = np.asarray(pos, dtype=float)
+    cells = np.asarray(cells, dtype=float)
     F = np.zeros((len(pos), len(cells)), dtype=bool)
-    for i, b in enumerate(cells):
-        _, pe, re = chain.ik(pos - b, Rt)
-        F[:, i] = (pe < pos_tol) & (re < rot_tol)
+    rows = max(1, _PAIR_BATCH // max(len(cells), 1))        # bound the (frames, cells, 3) block
+    for f0 in range(0, len(pos), rows):
+        f1 = min(f0 + rows, len(pos))
+        rel = pos[f0:f1, None, :] - cells[None, :, :]  # a 4-column mount cell still fails loudly
+        f, c = np.nonzero(~chain.cannot_reach(rel, Rt[f0:f1, None], pos_tol, rot_tol))
+        for lo in range(0, f.size, _IK_BATCH):
+            fi, ci = f[lo:lo + _IK_BATCH], c[lo:lo + _IK_BATCH]
+            _, pe, re = chain.ik(rel[fi, ci], Rt[f0 + fi])
+            F[f0 + fi, ci] = (pe < pos_tol) & (re < rot_tol)
     return F
 
 
@@ -302,9 +325,13 @@ def score_map(chain, pos, quat, cells, pos_tol=0.015, rot_tol=np.radians(20.0),
     manip = np.zeros(len(cells))
     rotm = np.zeros(len(cells))
     for i, b in enumerate(cells):
-        q, pe, re = chain.ik(pos - b, Rt)
+        rel = pos - b
+        live = ~chain.cannot_reach(rel, Rt, pos_tol, rot_tol)   # skip what arithmetic settles
+        if not live.any():
+            continue
+        q, pe, re = chain.ik(rel[live], Rt[live])
         ok = (pe < pos_tol) & (re < rot_tol)
-        cov[i] = ok.mean()
+        cov[i] = ok.sum() / len(pos)
         if not ok.any():
             continue
         qk = q[ok]
@@ -502,7 +529,11 @@ def mount_feasibility(chains, hands, mount, cells, pos_tol=0.015, rot_tol=np.rad
             R_in = np.einsum("ij,njk->nik", A.T, Rt)
             for c in which:
                 base = cells[c, :3] + Y @ off[:3]
-                _, pe, re = chains[a].ik(p_in - base @ A, R_in)
-                per[a][:, c] = (pe < pos_tol) & (re < rot_tol)
+                rel = p_in - base @ A
+                live = ~chains[a].cannot_reach(rel, R_in, pos_tol, rot_tol)
+                if not live.any():
+                    continue
+                _, pe, re = chains[a].ik(rel[live], R_in[live])
+                per[a][live, c] = (pe < pos_tol) & (re < rot_tol)
     combined = np.logical_and.reduce(per)
     return combined, per

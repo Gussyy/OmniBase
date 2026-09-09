@@ -3,6 +3,7 @@
     python -m omnibase plan datasets/can_v3 --episode 6 --hands 0,1 --out plan.json
     python -m omnibase curve datasets/can_v3 --episode 6
     python -m omnibase robot so101
+    python -m omnibase sweep datasets/can_v3 --workers 14 --out plans.json
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .data import describe_dataset, load
+from .data import describe_dataset, episodes, load
 from .plan import (SCORE_TERMS, arm_bases, ascii_map, base_grid, best_fixed, best_spot,
                    chunk, feasibility, home_share, mount_feasibility, mount_grid, pair,
                    score_map, yield_curve)
@@ -45,24 +46,26 @@ def _mount(a, hands):
     return mount, mount_grid(span=a.span, step=a.step, height=a.height, yaws=yaws)
 
 
-def _load(a):
-    """The episode's hands, filtered by --hands, which takes names or indices."""
-    ep = load(a.dataset, episode=a.episode, chain=load_robot(a.robot), column=a.column)
+def _pick(ep, spec):
+    """The episode's hands, filtered by a --hands string, which takes names or indices."""
     hands = list(ep.hands)
-    if a.hands:
-        want = [w.strip() for w in a.hands.split(",") if w.strip()]
-        chosen = []
-        for w in want:
-            if w.isdigit() and int(w) < len(hands):
-                chosen.append(hands[int(w)])
-            else:
-                match = [h for h in hands if h.name == w]
-                if not match:
-                    raise SystemExit(f"no hand {w!r}; this episode has "
-                                     f"{[h.name for h in hands]}")
-                chosen.append(match[0])
-        hands = chosen
-    return ep, hands
+    if not spec:
+        return hands
+    chosen = []
+    for w in [w.strip() for w in spec.split(",") if w.strip()]:
+        if w.isdigit() and int(w) < len(hands):
+            chosen.append(hands[int(w)])
+        else:
+            match = [h for h in hands if h.name == w]
+            if not match:
+                raise SystemExit(f"no hand {w!r}; this episode has {[h.name for h in hands]}")
+            chosen.append(match[0])
+    return chosen
+
+
+def _load(a):
+    ep = load(a.dataset, episode=a.episode, chain=load_robot(a.robot), column=a.column)
+    return ep, _pick(ep, a.hands)
 
 
 def cmd_plan(a):
@@ -140,6 +143,116 @@ def _write(a, ep, hands, chunks, mount):
                                 held=[round(float(h), 4) for h in ch.held]) for ch in chunks])
         Path(a.out).write_text(json.dumps(out, indent=1), encoding="utf-8")
         print(f"\nwrote {a.out}")
+
+
+# ---- sweeping a whole dataset ---------------------------------------------------------------
+# One chain per worker process, not one per episode: building the reach envelope costs a couple
+# of seconds and is a property of the arm, so a worker that handles twenty episodes should pay
+# for it once. Module-level because a spawned worker re-imports this module and fills it in.
+_W = {}
+
+
+def _worker(cfg):
+    """Set a worker up once. The envelope is built on first use and then reused all run."""
+    _W["cfg"] = cfg
+    _W["chain"] = load_robot(cfg["robot"])
+    _W["chain"].envelope()
+
+
+def _sweep_one(episode):
+    """Plan one episode. Returns a record, or an ``error`` record -- one bad episode in a
+    hundred should not take the other ninety-nine down with it."""
+    c, chain = _W["cfg"], _W["chain"]
+    try:
+        ep = load(c["dataset"], episode=episode, chain=chain, column=c["column"])
+        hands = _pick(ep, c["hands"])
+        cells = base_grid(span=c["span"], step=c["step"], height=c["height"])
+        Fs = [feasibility(chain, h.pos, h.quat, cells, c["pos_tol"], np.radians(c["rot_tol"]))
+              for h in hands]
+        chunks, held = chunk(Fs, cells, window=c["window"], home=c["home"])
+        return dict(episode=int(ep.index), frames=int(ep.frames),
+                    hands=[h.name for h in hands],
+                    solves=int(len(cells) * ep.frames * len(hands)),
+                    held=[round(float(v), 4) for v in held.mean(axis=1)],
+                    at_home=[round(float(v), 4) for v in home_share(chunks, ep.frames)],
+                    fixed=[round(float(best_fixed(F, cells)[1]), 4) for F in Fs],
+                    chunks=[dict(start=ch.start, stop=ch.stop,
+                                 bases=[[round(float(v), 4) for v in b] for b in ch.bases],
+                                 held=[round(float(h), 4) for h in ch.held],
+                                 at_home=list(ch.at_home)) for ch in chunks])
+    except Exception as exc:                       # noqa: BLE001 -- reported, not swallowed
+        return dict(episode=int(episode), error=f"{type(exc).__name__}: {exc}")
+
+
+def cmd_sweep(a):
+    """Every episode in a dataset, in parallel, to one file.
+
+    The parallelism is here rather than inside ``feasibility`` on purpose. Episodes are
+    independent and there are many of them, so splitting here fills every core with no
+    coordination, pays the pool's startup once for the whole run instead of once per call, and
+    lets each worker keep its reach envelope. Splitting the cell sweep instead was measured at
+    the same throughput per core and built a fresh pool for every episode.
+    """
+    import multiprocessing as mp
+    import time
+
+    # Flags this subcommand shares with the others but does not honour. Saying so beats
+    # accepting them and quietly doing something else.
+    if a.episode is not None:
+        raise SystemExit("sweep plans every episode; name a subset with --episodes 0,1,2 "
+                         "(plural), or plan just one with `omnibase plan --episode N`")
+    if a.pair:
+        raise SystemExit("sweep does not do rigid pairs yet; `omnibase plan --pair` does, "
+                         "one episode at a time")
+    eps = [int(v) for v in a.episodes.split(",")] if a.episodes else episodes(a.dataset)
+    cfg = dict(dataset=str(a.dataset), robot=a.robot, column=a.column, hands=a.hands,
+               span=a.span, step=a.step, height=a.height, window=a.window,
+               pos_tol=a.pos_tol, rot_tol=a.rot_tol, home=_home(a))
+    workers = max(1, min(a.workers, len(eps)))
+    cells = len(base_grid(span=a.span, step=a.step, height=a.height))
+    print(f"{len(eps)} episodes x {cells} placements, {workers} worker(s)", flush=True)
+
+    t = time.time()
+    if workers == 1:
+        _worker(cfg)
+        out = [_sweep_one(e) for e in _progress(eps, len(eps))]
+    else:
+        with mp.Pool(workers, initializer=_worker, initargs=(cfg,)) as pool:
+            out = list(_progress(pool.imap_unordered(_sweep_one, eps), len(eps)))
+    out.sort(key=lambda r: r["episode"])
+    dt = time.time() - t
+
+    good = [r for r in out if "error" not in r]
+    bad = [r for r in out if "error" in r]
+    solves = sum(r["solves"] for r in good)
+    frames = sum(r["frames"] for r in good)
+    print(f"\n{len(good)} episodes, {frames} frames, {solves} solves in {dt:.1f}s "
+          f"({solves / max(dt, 1e-9) / 1000:.1f}k solves/s)")
+    if good:
+        # Weight by frames: a long episode is more of the dataset than a short one.
+        def share(key):
+            return sum(sum(r[key]) / max(len(r[key]), 1) * r["frames"]
+                       for r in good) / max(frames, 1)
+        print(f"  chunked {100 * share('held'):.1f}% of frames held, against "
+              f"{100 * share('fixed'):.1f}% for the best single fixed base")
+        if cfg["home"]:
+            print(f"  {100 * share('at_home'):.1f}% of frames served from the robot's own base")
+    for r in bad:
+        print(f"  episode {r['episode']}: {r['error']}")
+    if a.out:
+        Path(a.out).write_text(json.dumps(
+            dict(dataset=str(a.dataset), robot=a.robot, window=a.window, height=a.height,
+                 pos_tol=a.pos_tol, rot_tol_deg=a.rot_tol, seconds=round(dt, 1),
+                 episodes=out), indent=1), encoding="utf-8")
+        print(f"\nwrote {a.out}")
+
+
+def _progress(it, total):
+    """Say how far along we are. A dataset sweep is long enough to want it."""
+    for i, item in enumerate(it, 1):
+        print(f"\r  {i}/{total} episodes", end="", flush=True)
+        yield item
+    print()
 
 
 def cmd_curve(a):
@@ -240,6 +353,16 @@ def main(argv=None):
     common(q)
     q.add_argument("--out", default=None, metavar="PLAN.json")
     q.set_defaults(func=cmd_plan)
+
+    q = sub.add_parser("sweep", help="plan every episode in a dataset, in parallel")
+    common(q)
+    q.add_argument("--workers", type=int, default=1, metavar="N",
+                   help="processes to split the episodes across. Episodes are independent, so "
+                        "this scales with cores until you run out of episodes.")
+    q.add_argument("--episodes", default=None, metavar="I,J,K",
+                   help="only these episodes. Default: every episode the dataset declares.")
+    q.add_argument("--out", default=None, metavar="PLANS.json")
+    q.set_defaults(func=cmd_sweep)
 
     q = sub.add_parser("curve", help="yield against how long one base must serve")
     common(q)

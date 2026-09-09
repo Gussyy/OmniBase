@@ -226,11 +226,84 @@ python -m omnibase plan  datasets/mine --episode 6 --out plan.json
 python -m omnibase curve datasets/mine --episode 6      # is this idea worth anything on my data?
 python -m omnibase map   datasets/mine --episode 6 --frames 0:112
 python -m omnibase robot so101                          # check the arm reads right
+python -m omnibase sweep datasets/mine --workers 14 --out plans.json   # the whole dataset
 ```
 
 `--hands` takes names or indices (`--hands right`, `--hands 0,1`); the default is every hand in
 the episode. `--column observation.state` reads what was measured instead of what was
 commanded.
+
+---
+
+## A whole dataset
+
+`plan` does one episode. `sweep` does all of them, across as many cores as you have:
+
+```bash
+python -m omnibase sweep datasets/mine --workers 14 --out plans.json
+```
+
+```
+16 episodes x 484 placements, 14 worker(s)
+
+16 episodes, 3674 frames, 3556432 solves in 146.5s (24.3k solves/s)
+  chunked 99.9% of frames held, against 82.6% for the best single fixed base
+```
+
+The parallelism is here, over episodes, rather than inside the reachability sweep. Episodes are
+independent and there are many of them, so splitting at this level fills every core with no
+coordination, pays the process pool's startup once for the run instead of once per episode, and
+lets each worker keep the reach envelope it built. Splitting the *cell* sweep instead was
+measured at the same throughput per core while rebuilding a pool for every call.
+
+`--episodes 0,1,2` limits which ones. Everything else — `--window`, `--home`, `--pos-tol`,
+`--step` — means what it means for `plan`. One episode failing to load is reported and the rest
+still run.
+
+### How fast
+
+Reachability is the whole cost: one inverse-kinematics solve per (placement, frame) pair, and a
+1764-cell grid over 100 episodes is about 44 million of them. Two things carry it, and they
+multiply because one removes work and the other makes what is left cheaper.
+
+**Most of a sweep is settled by arithmetic.** Only about 6% of pairs are reachable — the grid is
+a metre across and the arm is not — so the great majority of the runtime used to go into proving
+the obvious with a full iterative solve. `Chain.cannot_reach` applies necessary conditions
+derived from the chain itself (a reach envelope as a solid of revolution about joint 0, the same
+test for points out along the tool axis, and one scalar invariant that catches a gripper held
+sideways to the arm's plane) and rejects 70–85% of pairs in about 15 ms per 56,000. Every
+threshold is widened by a bound on how far the truth can sit from the nearest sample, so each
+region is a *superset* of the real one and being outside it is proof, not a guess.
+
+**The solver itself got cheaper**, without changing a step it takes: the rotation matrices are
+written out instead of stacked, the pseudo-inverses are applied to vectors rather than formed,
+the forward-kinematics prefix is hoisted out of the free-joint sweep, and all three seeds run as
+one batch.
+
+Measured on this machine, per-episode:
+
+| grid | before | after | |
+|---|---|---|---|
+| 225 placements x 249 frames | 82.1 s | 11.7 s | **7.0x** |
+| 484 placements x 249 frames | 218.6 s | 23.0 s | **9.5x** |
+| 225 placements x 251 frames | 82.5 s | 4.4 s | **19.0x** |
+
+It pays off more on bigger grids, because a bigger grid is mostly further away. Across a dataset
+with `--workers 14`, 0.7k solves/s becomes 24.3k — so the 44-million-solve run above is about
+half an hour rather than the better part of a day.
+
+**None of it changes an answer.** The optimisations were kept only where the feasibility mask
+came out bit-identical: 289,041 mask entries across three grids and two episodes, zero differing.
+`test_pruning_agrees_with_solving_everything` pins that in the suite by solving a grid both ways,
+and `test_pruning_only_rejects_the_truly_unreachable` takes poses the arm demonstrably just held
+and requires that none is rejected. A faster library that quietly reports an arm cannot reach
+something it can would be worse than a slow one.
+
+Two things were measured and *not* shipped, in case you were about to try them. Warm-starting
+the solver from the neighbouring cell is 2.6–8.4x faster and moves 0.2–1.1% of the mask, always
+reporting less reach than there is. Cramer's rule for the inner 3x3 solve is the same speed as
+the Cholesky now used and looks identical on a good day, but its backward error is nine orders
+worse and near-singular it returns `nan`, which reads downstream as "cannot reach".
 
 ---
 
@@ -331,6 +404,13 @@ angles.
 - **It assumes your observations are base-invariant.** Re-placing the base is free because a
   wrist camera rides the gripper and sees the same thing wherever the robot stands. Add a
   camera that watches the scene from the table and it sees the base move, and the trick dies.
+
+- **The prune is verified, not proven.** The bounds that widen each region are derived
+  honestly but by hand, and the sample grid that builds them is a grid. The evidence is
+  empirical and large — every pruned pair on a real sweep re-solved as unreachable, and the
+  masks are bit-identical to solving everything — but it is evidence, not a proof. If you add
+  an arm shaped very differently from the ones here, run `test_pruning_only_rejects_the_truly_unreachable`
+  against it before trusting a sweep.
 
 - **The solver is general, so it is slightly conservative.** Damped least squares with a
   task-priority split — position exactly, orientation in the null space of what is left — plus

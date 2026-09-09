@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omnibase"
-version = "0.1.0"
+version = "0.2.0"
 description = "Place a robot base per training window so free-flown gripper demonstrations become reachable"
 readme = "README.md"
 requires-python = ">=3.9"
