@@ -41,7 +41,9 @@ def test_ik_round_trip():
     _, pe, re = ch.ik(pos, R.from_matrix(M).as_quat())
     # Position is solved exactly -- it is the primary task and it converges.
     assert np.percentile(pe, 90) < 1e-5, f"position p90 {np.percentile(pe, 90):.2e} m"
-    assert np.median(np.degrees(re)) < 0.1, "orientation median too large"
+    # 0.5, not 0.1: with the tool point at the jaws (off the roll axis) the roll is not a free
+    # joint any more, and the null-space aim converges to ~0.26 deg median, 2.9 p90.
+    assert np.median(np.degrees(re)) < 0.5, "orientation median too large"
     # Orientation has a tail. This is a general numeric solver on a redundant chain, and a few
     # per cent of poses settle in the wrong branch -- a robot-specific closed form enumerates
     # branches and does not. Measured against one on real data, this understates what the arm
@@ -282,7 +284,7 @@ def test_home_is_reclaimed_as_soon_as_it_can_be():
     pos, quat = _reachable_path(ch, home)
     # Push a stretch of the path far away, so home cannot serve those frames.
     pos = pos.copy()
-    pos[20:32] += np.array([0.16, 0.0, 0.0])
+    pos[20:32] += np.array([0.30, 0.0, 0.0])   # 0.16 was out of reach for a tool point on the servo; the jaws reach further
     cells = ob.base_grid(span=0.28, step=0.04, height=0.08, centre=(0.10, -0.04))
     F = ob.feasibility(ch, pos, quat, cells)
     hi = ob.home_index(cells, home)

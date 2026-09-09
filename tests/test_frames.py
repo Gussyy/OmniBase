@@ -149,7 +149,8 @@ def test_euler_columns_read_as_poses():
         ep = ob.load(root, episode=0, euler=TRUE_EULER)
         h = ep.hands[0]
         assert h.source == "pose" and h.grip is not None and len(h.pos) == len(raw)
-        want = R.from_euler(TRUE_EULER, raw[:, 3:6]).as_quat()
+        # what load() hands back is the chain's terminal frame: the recorded body turned by BODY
+        want = (R.from_euler(TRUE_EULER, raw[:, 3:6]) * R.from_matrix(ob.data.BODY)).as_quat()
         assert np.allclose(np.abs((h.quat * want).sum(1)), 1.0, atol=1e-9)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

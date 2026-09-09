@@ -43,23 +43,30 @@ SO101_JOINTS = [
                    (9.38184e-7, -0.7071081, 9.381874e-7, 0.70710546), "y",
                    -157.21103, 162.78934, "wrist_roll"),
 ]
-#: The point between the jaws, in the gripper body's frame -- not the wrist flange. Getting this
-#: wrong shifts every reachability answer by however far out it is.
-SO101_TOOL = (0.0, -0.0748, 0.0)
+#: The chain ends at the wrist_roll joint's frame, not at the gripper body's, and the two are not
+#: the same frame. Measured in the simulator by writing joint angles and reading link positions
+#: (so101-scene/scripts/joint_convention_check.py): in the terminal frame the fingertip frame
+#: sits 98 mm along -z, the gripper servo -- the housing's top -- along -y, and the jaws open
+#: along -/+x. In the gripper BODY's own frame (the one a recording of this gripper reports, the
+#: one its wrist camera is placed in) the jaws reach along +y and the housing top is +z. This is
+#: that body frame expressed in the terminal frame: columns are the body's x, y, z. It is its
+#: own inverse. Every recording is brought through it on the way to the solver (data._apply_frame).
+SO101_BODY_IN_CHAIN = ((-1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, -1.0, 0.0))
 
-#: The direction the jaws REACH, in the same frame. Not the tool offset, and not its negation
-#: either -- the two are perpendicular in intent even though they share an axis here. The offset
-#: says where the jaw bodies sit relative to the gripper's origin; this says which way they open
-#: onto the world.
+#: The point between the jaws, in the chain's terminal frame -- not the wrist flange. Getting this
+#: wrong shifts every reachability answer by however far out it is. 75 mm along the fingers, where
+#: the pads meet; the fingertip frame is at 98.
+SO101_TOOL = (0.0, 0.0, -0.0748)
+
+#: The direction the jaws REACH, in the terminal frame: -z, see SO101_BODY_IN_CHAIN.
 #:
-#: Measured, because reading it off the offset gets it backwards: this asset's jaw bodies sit
-#: above their base at local -y, and the gripper grasps by descending, so the mouth faces local
-#: +y. Confirmed against a recording of the gripper picking a can off a table -- at the moment
-#: the jaws close, +y points at the table and -y at the ceiling.
-#:
-#: If you add an arm, measure this for it too. A sign error here does not fail loudly: every
-#: pose comes back "unreachable" and the data looks like the problem.
-SO101_APPROACH = (0.0, 1.0, 0.0)
+#: This was (0, 1, 0) for a day, and that day's exports pointed the real fingers 90 degrees from
+#: the human's. The +y was right -- for the gripper body's frame, which is what the recording
+#: that "confirmed" it was reporting -- and wrong for the frame the solver actually works in.
+#: A sign or axis error here does not fail loudly: the sweep is just as feasible, the export's
+#: own forward-kinematics check passes, and the policy trained on it cannot grasp anything.
+#: Measure it in the simulator, against link positions, not against a recording.
+SO101_APPROACH = (0.0, 0.0, -1.0)
 
 
 def so101():

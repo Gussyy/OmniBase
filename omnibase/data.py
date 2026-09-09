@@ -38,10 +38,12 @@ from pathlib import Path
 
 import numpy as np
 
-from .robots import SO101_APPROACH
+from .robots import SO101_APPROACH, SO101_BODY_IN_CHAIN
 
 #: Which way a gripper reaches, in this library's body frame. See the robot it came from.
 APPROACH = np.asarray(SO101_APPROACH, dtype=float)
+BODY = np.asarray(SO101_BODY_IN_CHAIN, dtype=float)   # the gripper body's frame, in the chain's terminal frame
+FINGERS = BODY @ APPROACH                             # the same direction in the body's own frame: +y
 
 #: The seven fields that make a pose, in the order this library wants them.
 POSE_FIELDS = ("x", "y", "z", "qx", "qy", "qz", "qw")
@@ -300,6 +302,15 @@ def _recipe(frame=None, level=None, **over):
     return r
 
 
+def _turned(hand):
+    """The same hand with its orientation in the chain's terminal frame."""
+    from scipy.spatial.transform import Rotation as R
+
+    import dataclasses
+
+    return dataclasses.replace(hand, quat=(R.from_quat(hand.quat) * R.from_matrix(BODY)).as_quat())
+
+
 def _apply_frame(hand, r):
     """Put one hand in this library's frame: rig body axes, tool point, table level.
 
@@ -315,10 +326,10 @@ def _apply_frame(hand, r):
     B = np.asarray(r["body_R"], dtype=float) if r.get("body_R") is not None else (
         _axes(r["body"]) if r["body"] else None)
     if B is not None:
-        M = M @ B.T                                    # the rig's body axes -> ours
+        M = M @ B.T                                    # the rig's body axes -> the gripper body's
     pos = np.asarray(hand.pos, dtype=float)
     if r["tcp"]:
-        pos = pos + M @ (float(r["tcp"]) * APPROACH)   # tracked point -> out at the fingers
+        pos = pos + M @ (float(r["tcp"]) * FINGERS)    # tracked point -> out at the fingers
     if r["up"] is not None:
         L = _upright(r["up"])
         pos, M = pos @ L.T, np.einsum("ij,njk->nik", L, M)
@@ -369,7 +380,7 @@ def contacts(grip, lo=None, hi=None, closing=None):
 
 
 def load(path, episode=None, chain=None, column="action", frame=None, level=None,
-         tcp=None, euler=None, body=None, stride=1):
+         tcp=None, euler=None, body=None, stride=1, terminal=True):
     """One episode of a LeRobot dataset, as ``pos``/``quat`` per hand.
 
     Args:
@@ -410,6 +421,12 @@ def load(path, episode=None, chain=None, column="action", frame=None, level=None
         names = [f"c{i}" for i in range(act.shape[1])]
 
     hands = [_apply_frame(h, r) for h in _pose_hands(_split(names), act, r["euler"])]
+    if terminal:
+        # Everything above is in the gripper BODY's frame -- jaws along +y, housing top +z, the
+        # frame a recording of the gripper reports and the level fit reasons in. The solver works
+        # in the chain's terminal frame, which is that body turned by BODY. Callers that analyse
+        # the recording rather than solve it (fit_level) ask for terminal=False.
+        hands = [_turned(h) for h in hands]
     if not hands and chain is not None:
         hands = _joint_hands(names, act, chain)
     if not hands:
@@ -640,7 +657,7 @@ def fit_level(path, subset=None, frame="fastumi", column="action", eulers=("xyz"
         takes = []
         for e in eps:
             try:
-                ep = load(root, episode=e, column=column, euler=euler)
+                ep = load(root, episode=e, column=column, euler=euler, terminal=False)
             except Exception as exc:                 # noqa: BLE001 -- one bad episode, not the run
                 trouble = trouble or f"episode {e}: {type(exc).__name__}: {exc}"
                 continue
