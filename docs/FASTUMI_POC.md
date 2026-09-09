@@ -123,17 +123,20 @@ Both exports come from the same 3,323 recordings, the same task string, the same
 | output episodes (contiguous runs the arm can hold) | 8,463 | 4,427 |
 | frames at 10 Hz | **256,433** (7.1 h) | 155,945 (4.3 h) |
 | size on disk | 1.4 GB | 815 MB |
-| joint step per frame, median / p95 / worst | 15.9° / 34.5° / 59.7° | 15.3° / 33.3° / 59.3° |
+| per-joint step per frame, median / p95 | 1.5° / 9.3° | 1.3° / 8.7° |
+| largest joint step in a frame, median / p95 / worst | 4.3° / 15.2° / 59.7° | 4.0° / 14.1° / 59.3° |
 | export time, 12 processes | 17 min | 9 min |
 
 The fixed-base twin has 61% of the frames. That is less than the 84.8 → 48.0 ratio suggests
 because a run also has to be at least 20 frames long to be an episode: frames one fixed base can
 hold come in shorter pieces, and the short pieces are the ones that fall out.
 
-The joint steps are large — a median of 16° in a tenth of a second — and honest: that is how fast
-a human hand moves, seen through a five-joint arm that has to swing its wrist to follow it.
-Both sets were cut wherever a step exceeded 60°, which is the solver unwinding a wrist-roll
-limit, not the hand. Every exported frame puts the gripper within 15 mm and 20° of where the
+The motion is smooth at the joint level — a median step of under 2° per joint per frame at 10 Hz,
+and the wrist roll, the one free joint the solver re-aims, reverses direction in under 1% of
+frames. The worst step in a typical episode is 16°, which is a hand turning fast seen through a
+five-joint arm. Both sets were cut wherever a step exceeded 60°, which is the solver unwinding a
+wrist-roll limit, not the hand.
+Every exported frame puts the gripper within 15 mm and 20° of where the
 hand was; that is checked by forward kinematics on the way out, not assumed.
 
 ## Training
