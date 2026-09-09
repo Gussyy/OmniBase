@@ -471,11 +471,18 @@ print(omnibase.describe(chain))
 `tool` is the point **between the fingers**, not the wrist flange. Getting it wrong shifts every
 reachability answer by however far out it is.
 
-**Check it before you trust it.** A chain with a plausible-looking wrong number does not fail,
-it quietly reports that your data is unreachable. `tests/test_omnibase.py` round-trips random
-joint configurations through forward and inverse kinematics; do at least that much for a new
-arm, and if you have the robot or a simulator, compare against poses it reports for known joint
-angles.
+**Measure the frame in the simulator. Not from a recording, not from the URDF's comments.**
+The chain ends at its last joint's frame, and that is not the gripper body's frame: for the
+SO-101 the fingers reach along the terminal frame's −z and the tool point is 75 mm down that
+axis, while the body a recording reports has its fingers along +y. This library ran a day with
+the body's axis in the chain's frame. Nothing failed: the sweep was as feasible as ever, the
+export's forward-kinematics check agreed to the millimetre, and the policy trained on it aimed
+its real fingers 90 degrees from every human's, because every check compared the chain with
+itself. The one that catches it is `tests/test_robots.py`: gripper_base and fingertip positions
+read back from the simulator for a handful of joint angles, against the chain's tool point and
+approach axis for the same angles. Write joint angles into your simulator, read link positions
+back (`so101-scene/scripts/joint_convention_check.py` does it for Isaac Lab), paste the table,
+and keep the test. Do not fit the table to the model.
 
 ---
 
@@ -521,12 +528,16 @@ angles.
 ```bash
 python tests/test_omnibase.py       # kinematics, chunking, scoring
 python tests/test_data.py           # LeRobot loading -- builds its own datasets in a temp dir
-# or, both:  python -m pytest
+python tests/test_frames.py         # frame calibration of a rig that does not say what its numbers mean
+python tests/test_robots.py         # the robot model against link positions measured in the simulator
+# or, all:  python -m pytest
 ```
 
-The ones that matter are the two that could pass while being wrong: inverse kinematics that
-reports success it did not achieve, and a chunker that claims a placement holds frames it does
-not. Both are checked against forward kinematics rather than against themselves.
+The ones that matter are the ones that could pass while being wrong: inverse kinematics that
+reports success it did not achieve, a chunker that claims a placement holds frames it does not,
+and a robot model whose tool point and jaw axis are somewhere the robot's are not. The first two
+are checked against forward kinematics rather than against themselves; the last against the
+simulator, because forward kinematics of a wrong model agrees with itself perfectly.
 
 ---
 
