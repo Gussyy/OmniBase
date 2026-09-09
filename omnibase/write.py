@@ -84,12 +84,18 @@ def slice_video(src, dst, start, stop, stride, fps, size, crf=23, offset=0):
            f"slice frames {start}-{stop} of {Path(src).name}")
 
 
-def first_frame(path, size):
-    """One decoded frame as ``(3,)`` channel means/mins/maxes in 0..1, for the image statistics.
+def first_frame(path, size, lit=18):
+    """One decoded frame: channel statistics, and where the picture actually is.
 
     LeRobot refuses to normalise a camera it has no statistics for, and computing them properly
     means decoding every frame of every episode. One frame per episode, averaged over thousands
     of episodes, is within a per cent of that and costs nothing.
+
+    The second thing is the bounding box of the non-black pixels. A fisheye lens does not fill
+    its sensor -- these recordings are a bright ellipse on a black rectangle -- and a policy
+    trained on that will see black corners at deployment or it will not recognise the view.
+    Recording where the picture sits means the simulator can be masked to match, rather than
+    somebody eyeballing it later.
     """
     w, h = size
     out = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-frames:v", "1",
@@ -98,8 +104,12 @@ def first_frame(path, size):
     px = np.frombuffer(out.stdout, dtype=np.uint8)
     if px.size < h * w * 3:
         return None
-    px = px[: h * w * 3].reshape(-1, 3).astype(np.float64) / 255.0
-    return dict(mean=px.mean(0), sq=(px * px).mean(0), min=px.min(0), max=px.max(0))
+    img = px[: h * w * 3].reshape(h, w, 3)
+    flat = img.reshape(-1, 3).astype(np.float64) / 255.0
+    ys, xs = np.nonzero(img.max(axis=2) > lit)
+    box = None if not len(xs) else (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
+    return dict(mean=flat.mean(0), sq=(flat * flat).mean(0), min=flat.min(0), max=flat.max(0),
+                box=box)
 
 
 class Writer:
@@ -123,6 +133,7 @@ class Writer:
         self.video_key, self.size, self.robot_type = video_key, tuple(size), robot_type
         self.episodes, self.tasks, self.frames = [], {}, 0
         self._acc = {}
+        self._box = None
 
     def add(self, state, action, task, video, extra=None):
         """One episode: ``(n, d)`` states and actions, a language string, a finished clip.
@@ -159,6 +170,11 @@ class Writer:
             st["sq"] = st["sq"] + img["sq"]
             st["min"] = img["min"] if st["min"] is None else np.minimum(st["min"], img["min"])
             st["max"] = img["max"] if st["max"] is None else np.maximum(st["max"], img["max"])
+            if img.get("box"):
+                b = img["box"]
+                self._box = b if self._box is None else (
+                    min(self._box[0], b[0]), min(self._box[1], b[1]),
+                    max(self._box[2], b[2]), max(self._box[3], b[3]))
         return idx
 
     def _fold(self, key, a):
@@ -291,4 +307,19 @@ class Writer:
                     video_path="videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
                     features=self._features())
         (self.root / "meta/info.json").write_text(json.dumps(info, indent=1), encoding="utf-8")
+
+        # Beside LeRobot's own metadata, not inside it: what a reader needs to reproduce this
+        # dataset's view at deployment. LeRobot warns about keys it does not know, and it is
+        # right to -- this is OmniBase's business, not the format's.
+        extra = dict(camera=self.video_key, size=list(self.size))
+        if self._box:
+            x0, y0, x1, y1 = self._box
+            w, h = self.size
+            extra["ellipse"] = [round((x0 + x1) / 2 / w, 4), round((y0 + y1) / 2 / h, 4),
+                                round((x1 - x0) / 2 / w, 4), round((y1 - y0) / 2 / h, 4)]
+            extra["ellipse_note"] = ("centre and radii as fractions of the frame: where the "
+                                     "lens's picture actually is. Mask a rendered camera to "
+                                     "this before showing it to a policy trained here.")
+        (self.root / "meta/omnibase.json").write_text(json.dumps(extra, indent=1),
+                                                      encoding="utf-8")
         return self.root
