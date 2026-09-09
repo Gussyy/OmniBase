@@ -62,7 +62,7 @@ and stops when they are not — a grasp happens at table height plus half an obj
 objects write 5 cm of scatter over an effect worth 1. This is asserted as a test, not filed as a
 caveat, and the yield below was checked against tool offsets from 3 to 15 cm.
 
-### Two mistakes worth recording
+### Three mistakes worth recording
 
 **The tool offset says where the jaws *are*, not the direction they reach.** `SO101_TOOL` is
 (0, −0.0748, 0), and reading that as the reach direction makes the arm able to point its jaws
@@ -75,6 +75,26 @@ is wrong: over 180 grasps of shoes the pre-grasp motion averaged **116° away fr
 down**, because half of them reach up and over the side of a box first. That fit returned 0.54
 consistency and the wrong axis; asking where the fingers *point* at the moment of contact
 returns 0.95 and the right one.
+
+**The solver's frame was not the gripper's, and every check lived in the solver's frame.**
+`so101()` ends at the wrist_roll joint's frame. The gripper body's frame — the one a recording
+of this gripper reports, the one its wrist camera is mounted in — is that frame turned: measured
+in the simulator by writing joint angles and reading link positions back, the fingertip frame
+sits 98 mm along the terminal frame's **−z**, the servo along −y, and the jaws open along x.
+`SO101_APPROACH` said +y, which is right for the body's frame and was "confirmed" against a
+recording that reports the body's frame. The tool point sat 75 mm toward the servo. Every plan
+and export made this way pointed the real fingers 90° from the human's, and passed every check
+— the sweep was just as feasible, the export's forward-kinematics test agreed to the millimetre
+— because the checks were all in the same wrong frame. The first policy trained on it scored 0
+of 20 on the tomato can before the cause was found by playing its own training data back into
+the simulator. The fix is one constant rotation on the way from the recording to the solver
+(`SO101_BODY_IN_CHAIN`), the tool point at the jaws, and the rule that a robot's frame is
+measured in the simulator against link positions, never against a recording.
+
+Two deployment bugs were found the same way and are recorded in the sibling repo's history:
+the simulator's joint action is an offset from a default pose, scaled and clipped to ±28.6°,
+which the bridge computed against a pose the scene did not use; and the wrist camera sat low
+and flat and showed the policy a white void with no object in it.
 
 ---
 
