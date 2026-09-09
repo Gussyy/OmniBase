@@ -141,7 +141,32 @@ hand was; that is checked by forward kinematics on the way out, not assumed.
 
 ## Training
 
-TBD
+The policy is LeRobot's SmolVLA architecture with its vision-language half initialised from
+`HuggingFaceTB/SmolVLM2-500M-Video-Instruct` — a model that has read web pages and watched video
+clips and has never been given a robot action — and its action expert started from random
+weights. Nothing in it has seen an SO-101, a UMI gripper, or any robot dataset. The only robot
+data it will ever see is the export above.
+
+One run per dataset, identical in every setting but the data:
+
+| | |
+|---|---|
+| observation | one 512x384 wrist frame, six joint positions in degrees, one task string |
+| action | 20-step chunk of joint targets at 10 Hz, 10 executed before re-planning |
+| batch / steps | 64 / 25,000 (1.6 M samples: 6 passes over the OmniBase set, 10 over the fixed one) |
+| precision | bf16 autocast via Accelerate; LeRobot's own `use_amp` cannot unscale the bf16 VLM's gradients on this stack |
+| hardware | one RTX 4070 Ti, 8.5 GB used, 12 loader processes; 0.55 s per step, 116 samples/s, loader wait 5 ms |
+| time | about 3.8 h per run, both local; the RunPod budget was not touched |
+
+Two things were measured before the runs rather than assumed. The loader was checked to keep
+up — video decode is on the CPU and the GPU never waits for it — and the GPU was found to be
+the limit at any batch size from 16 to 96, all within a few percent of the same samples per
+second; 64 was chosen because it leaves a third of the memory free and 96 leaves one gigabyte.
+
+The fixed-base run gets the same number of steps, not the same number of epochs, because the
+question is what the same compute buys from the same recordings.
+
+TBD: loss curves and final losses.
 
 ## The tomato
 
