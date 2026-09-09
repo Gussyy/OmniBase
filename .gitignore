@@ -7,3 +7,6 @@ dist/
 .venv/
 .claude/
 .bench/
+
+# shared agent whiteboard, not for publishing
+session.md
