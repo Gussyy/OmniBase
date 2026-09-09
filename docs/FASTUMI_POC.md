@@ -109,7 +109,32 @@ because moving the base moves that plane, which is why chunking roughly doubles 
 
 ## The dataset
 
-TBD
+`select` kept every episode that held at least 70% of its frames somewhere and asked for
+3,307 of them — **31 GB of the 100 GB budget**, because the yield threshold turned out to be the
+real selector and bytes barely discriminate: a FastUMI episode is 10 MB of video whatever it
+contains. The 16 VR can episodes were added to both sets, repeated eight times, so the one scene
+the policy will be tested in is not a rounding error in its training data.
+
+Both exports come from the same 3,323 recordings, the same task string, the same 10 Hz, the same
+512x384 wrist clip. The only difference is where the arm was allowed to stand.
+
+| | OmniBase (base per window) | one fixed base per episode |
+|---|---|---|
+| output episodes (contiguous runs the arm can hold) | 8,463 | 4,427 |
+| frames at 10 Hz | **256,433** (7.1 h) | 155,945 (4.3 h) |
+| size on disk | 1.4 GB | 815 MB |
+| joint step per frame, median / p95 / worst | 15.9° / 34.5° / 59.7° | 15.3° / 33.3° / 59.3° |
+| export time, 12 processes | 17 min | 9 min |
+
+The fixed-base twin has 61% of the frames. That is less than the 84.8 → 48.0 ratio suggests
+because a run also has to be at least 20 frames long to be an episode: frames one fixed base can
+hold come in shorter pieces, and the short pieces are the ones that fall out.
+
+The joint steps are large — a median of 16° in a tenth of a second — and honest: that is how fast
+a human hand moves, seen through a five-joint arm that has to swing its wrist to follow it.
+Both sets were cut wherever a step exceeded 60°, which is the solver unwinding a wrist-roll
+limit, not the hand. Every exported frame puts the gripper within 15 mm and 20° of where the
+hand was; that is checked by forward kinematics on the way out, not assumed.
 
 ## Training
 
