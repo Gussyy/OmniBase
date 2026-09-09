@@ -227,6 +227,9 @@ python -m omnibase curve datasets/mine --episode 6      # is this idea worth any
 python -m omnibase map   datasets/mine --episode 6 --frames 0:112
 python -m omnibase robot so101                          # check the arm reads right
 python -m omnibase sweep datasets/mine --workers 14 --out plans.json   # the whole dataset
+python -m omnibase level datasets/mine --frame fastumi --out level.json  # what do its numbers mean?
+python -m omnibase select plans.json --budget-gb 90 --out selection.json # what is worth fetching?
+python -m omnibase export plans.json --out datasets/so101 --fps 10       # make it trainable
 ```
 
 `--hands` takes names or indices (`--hands right`, `--hands 0,1`); the default is every hand in
@@ -304,6 +307,96 @@ the solver from the neighbouring cell is 2.6–8.4x faster and moves 0.2–1.1% 
 reporting less reach than there is. Cramer's rule for the inner 3x3 solve is the same speed as
 the Cholesky now used and looks identical on a good day, but its backward error is nine orders
 worse and near-singular it returns `nan`, which reads downstream as "cannot reach".
+
+---
+
+## Recordings that do not say what their numbers mean
+
+Everything above assumes you can hand this library `pos` and `quat` in one fixed world frame. A
+hand-held rig often cannot. FastUMI's poses, for instance, are relative to the tracker's own
+pose at frame 0, so nothing in the file says which way is up; the tracker sits somewhere on the
+gripper nobody wrote down; its three Euler angles are in one of twelve conventions and the file
+does not say which. Every one of those is wrong by default, and a wrong one does not fail — it
+reports that your data is unreachable.
+
+`omnibase level` measures all four from the recording. Run it first, on anything new:
+
+```bash
+python -m omnibase level datasets/mine --frame fastumi --out level.json
+python -m omnibase sweep datasets/mine --level level.json --stride 2 --out plans.json
+```
+
+```
+  euler xyz, tool 0.06 m ahead of what the rig tracked
+  up [0.993, -0.074, 0.096] in the recording's own axes
+  360 contacts from 60 episodes lie flat to 22 mm rms (over the 80% kept)
+  2.67% of all frames end up under the table
+  fingers along [-0.32, 0.013, -0.947] of the rig's own axes, and they point at the table at
+  14 deg when they close
+  the same body direction does that at every grasp to 0.95 of 1.00
+  looks usable.
+```
+
+Each number comes from the part of the data that can see it:
+
+| | measured from |
+|---|---|
+| **up** | the frames where the jaw changed state — the hand touching things that were standing on a surface. Positions only, so no convention can corrupt it. Levelled per episode, because a rig docked in the same slot every take shares its orientation between takes and not its origin. |
+| **the sign of up** | whichever choice leaves less of the recording underground. Asking the jaws instead reads well and is wrong the moment a task grasps from the side, which taking a plate out of a rack does. |
+| **the finger axis** | the body direction that points at that surface whenever the jaws close. |
+| **the Euler convention** | the same consistency. Read three angles in the wrong order and each frame's body frame is turned differently, so no single direction can point at the table at every grasp. |
+
+That last statistic — `aligned` — is the one to watch, because it tests the whole story at once.
+It reaches 1.0 only if the episodes really do share a frame, the angles really were read in the
+right order, and the fitted table really is the table. Across FastUMI's five pick-and-place
+tasks it reads **0.89 to 0.99**, with the fingers 6 to 22 degrees off the table at a grasp —
+which is never fitted, and is what a person picking something up actually does.
+
+**The tool offset is the one thing that stays loose**, and the library says so rather than
+hiding it. It is found by asking which offset makes grasps taken at different wrist angles land
+on the same surface, which works when the objects are one height and stops working when they
+are not: a grasp happens at table height plus half an object, so a box of assorted things writes
+5 cm of scatter over an effect worth about 1. `test_the_tool_offset_is_only_as_sharp_as_the_objects`
+pins both halves. Check that your answer does not depend on it.
+
+---
+
+## From a plan to a dataset
+
+A plan is an answer about a recording. A policy cannot train on an answer, so `export` hands the
+chosen placement back to the solver — this time keeping the joint angles `feasibility` throws
+away — and writes an ordinary LeRobot v3.0 dataset: joint angles in degrees, the wrist video cut
+to match, and the metadata LeRobot reads without conversion.
+
+```bash
+python -m omnibase select plans_*.json --budget-gb 90 --out selection.json
+python -m omnibase export plans_*.json --out datasets/so101 --fps 10 --workers 8
+python -m omnibase export plans_*.json --out datasets/so101_fixed --fixed-base --fps 10
+```
+
+`select` exists because of the shape of this data: a FastUMI episode is 30 kB of poses and 10 MB
+of video, and every question OmniBase asks is answered by the 30 kB. Sweep everything, decide,
+and fetch video only for what survived. The last line is the honest comparison — the same
+episodes with the arm bolted down in one place, keeping only the frames it can hold.
+
+Two things the export had to learn, and both are about the difference between counting what an
+arm can reach and writing down what it should do.
+
+**A redundant joint has several ways to make the same pose.** Solving each frame independently
+lets it swap between them; measured on FastUMI, a 320-degree step in wrist_roll between one
+frame and the next in an episode where nothing else moved more than fifteen. `solve` re-solves
+such a frame from the previous frame's answer, and re-aims a free joint — a wrist roll, which
+moves the tool point nowhere — to the nearest value that still holds the tolerance.
+
+**Some of those steps are real, and the answer is to stop.** The SO-101's wrist stops at −157
+and +163 degrees, so a hand that rotates past the gap leaves the arm to unwind 320 the other
+way. Both frames either side are honest; the line between them is not. `--max-step` ends the
+episode there — on a slice of FastUMI's tableware task that costs 10 frames of 1381 and takes
+the worst step from 320 degrees to 34.
+
+The export also notes where the lens's picture sits — a fisheye leaves its corners dark — and
+writes the ellipse into `meta/omnibase.json`, so a simulator rendering a full rectangle can be
+masked to the same shape instead of somebody eyeballing it later.
 
 ---
 
