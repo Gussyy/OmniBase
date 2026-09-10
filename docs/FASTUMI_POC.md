@@ -219,7 +219,31 @@ TBD: loss curves and final losses.
 
 ## The tomato
 
-TBD
+The object is the YCB tomato soup can the 16 VR episodes were recorded with, in Isaac Sim, from
+the wrist camera only, with one task string. Twenty rollouts per row, the arm starting at a
+fixed ready pose, success = reached (jaws within 5 cm), lifted, placed in the box.
+
+| policy | scene | reached | lifted | placed |
+|---|---|---|---|---|
+| OmniBase, plain | can at the wrong-frame position (0.26, -0.06) | 0/20 | 0 | 0 |
+| OmniBase, plain | can where the demos grasped it (0.20, -0.01) | 0/20 | 0 | 0 |
+| fixed base, plain | same | 0/20 | 0 | 0 |
+| OmniBase + 3k steps on the at-home can rows | same | 0/20 | 0 | 0 |
+| fixed base + 3k steps on the at-home can rows | same | 0/20 | 0 | 0 |
+| OmniBase + 3k steps on the can rows at (0.18, 0.28) | robot fixed at (0.18, 0.28) | TBD | TBD | TBD |
+| OmniBase, plain | robot fixed at (0.18, 0.28) | TBD | TBD | TBD |
+| fixed base (+ fine-tune) | robot fixed at (0.18, 0.28) | TBD | TBD | TBD |
+
+Why the zeros, measured rather than guessed (the full trail is in
+`docs/experiment/2026-09-09_fastumi_so101_smolvla.md`): the 16 demonstrations were made by a
+hand that approached the can from the side, with its approach axis 40-118 degrees off the
+bearing from the robot's base. A five-joint arm's tool must lie in the vertical plane through
+its base, so from where the robot was placed **none** of the demo frames are executable at
+15 mm / 20 degrees -- `omnibase sweep --home` says 0.0%, and the base it moves to instead is
+25-30 cm to the left. Retargeting the demos "at home" anyway, at a 90-degree orientation
+tolerance, yields contorted postures that no rollout starts from; a policy fine-tuned on them
+closes its jaws in the air. What OmniBase tells you here is the honest thing: put the robot
+where the demonstrations are reachable. That is the last row.
 
 ---
 
