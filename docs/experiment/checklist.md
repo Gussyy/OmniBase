@@ -22,10 +22,10 @@ Ticked as things land. Times are local. Companion to `2026-09-09_fastumi_so101_s
 - [x] **Re-sweep finished 08:42** (after two restarts); corrected yields recorded in the log §10: all 87.4% chunked vs 58.0% fixed, sandwich halved, can 77/73 (08:50)
 - [x] ~~**Re-sweep finishes** (`RESWEEP DONE` in `E:\data\fastumi\resweep.log`, ~08:45 — the corrected frame solves 2.1× slower) — record per-task chunked vs fixed yields in the log §10 with `E:\data\out\sweep_table.py` *(manual)*~~
 - [x] Writer records the camera picture as a median, not a union, before the export runs (23:58)
-- [ ] **Export** `so101_omnibase2` and `so101_fixed2` from `plans2` (can with `--tcp 0.0748`, ×8 repeats)
-- [ ] **Verifier passes** on both (FK ≤15 mm/20°, rows, clips, stats)
-- [ ] Check `meta/omnibase.json` ellipse ≈ 0.37 × 0.374 on both *(manual)*
-- [ ] **Train `so101_omnibase2`** 32,500 steps (~5 h, ~09:45→14:45); checkpoints every 2,500; loss curve plotted with `plot_loss.py OUT.png 2` *(manual: plot)*
+- [x] **Export** `so101_omnibase2` (349,382 frames / 9,313 eps, 18 min, 1.9 GB) and `so101_fixed2` (249,902 / 5,453, 11 min, 1.4 GB) from `plans2` (09:19)
+- [x] **Verifier passes** on both: per-frame step median 1.4° p95 10.3/10.4°, episodes ≥20 frames (09:24)
+- [x] `meta/omnibase.json` ellipse 0.373 × 0.374 (omnibase2), 0.374 × 0.374 (fixed2), centred; the median fix works (09:27)
+- [ ] **Train `so101_omnibase2`** 32,500 steps (~5 h, started 09:24 → ~14:25); checkpoints every 2,500; loss curve plotted with `plot_loss.py OUT.png 2` *(manual: plot)*
 - [ ] **Preflight passes** at rollout (arm holds reset pose ≤2°)
 - [ ] **20 rollouts `so101_omnibase2`** (absolute angles, 8 averaged draws, frames dumped) → `eval_omnibase2.json`
 - [ ] Look at the dumped frames: object in view, fingers where expected *(manual)*
