@@ -354,6 +354,28 @@ What runs on it: `can_v3d` swept at home with rot-tol 90 (43% of moving rows at 
 rented 4090, then 20 rollouts each in the corrected scene -- alongside the two plain policies
 in the corrected scene (0.37 mask) for the like-for-like pair.
 
+## 10c. The robot where the demos are executable, and a fourth frame bug (21:10)
+
+`omnibase sweep --home` over the pause-free demos says the fixed SO-101 executes 45% of their
+moving rows from (0.18, 0.28) at the strict 15 mm / 20° -- the operator worked from the left --
+and none from (0, 0). So the last experiment fixes the robot there (`eval_tomato_box_base2.yaml`:
+can and box unmoved, ready pose = a demo's own start posture, place target written in the root
+frame because `to_root_frame` rotates but does not translate). `can_base2` = the seven at-home
+chunks of the six long grasp episodes, ×8; offline, its joints put the jaws within 5.9 mm /
+6.6° of the recorded hand down to the can.
+
+Fine-tuned on it, the OmniBase policy **descends to the can, closes the jaws 22 mm from its
+centre, and lifts** -- the first grasp attempt of the whole run. The jaws closed beside the can
+(a nearly blind policy replaying the mean demo against ±2 cm of can jitter; the moving jaw
+pushes the can), so `lifted` stayed 0. `reached` also stayed 0, which is the fourth bug: the
+evaluator's `SO101_FULL_GRASP_OFFSET` was (0, -0.0748, 0) in gripper_base -- the SERVO
+direction, the same 90° mistake the retargeting had, so "reached" was scored 10 cm from the
+jaws and no correct grasp could ever satisfy it (day one's "lifted without reached" was this).
+Fixed to (0, 0, -0.0748) from the measured fingertip vector, guarded by
+`so101-scene/tests/test_tuning.py`, and the base2 rollouts were rerun. Lesson, again: every
+constant that names a direction on the robot -- tool, approach, camera, *and metric* -- gets
+checked against a measurement, not against another constant.
+
 ## 11. Where everything is
 
 | what | where |
