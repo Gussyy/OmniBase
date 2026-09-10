@@ -31,7 +31,7 @@ Ticked as things land. Times are local. Companion to `2026-09-09_fastumi_so101_s
 - [ ] Look at the dumped frames: object in view, fingers where expected *(manual)*
 - [ ] If 0/20: re-export `can_only2` from `plans2/can_v3.json`, fine-tune 3,000 steps, roll out again *(manual decision)*
 - [ ] **Train `so101_fixed2`** 32,500 steps; **20 rollouts** → `eval_fixed2.json`
-- [ ] Regenerate `docs/FASTUMI_POC.md`: sweep table from `plans2`, dataset table, training, tomato-can results, cost, "what this does not show" *(manual)*
+- [ ] Regenerate `docs/FASTUMI_POC.md`: ~~sweep table from `plans2`, dataset table, training, cost~~ (done 09:40), tomato-can results, loss curves, "what this does not show" *(manual)*
 - [ ] Fill §10 of the experiment log; commit; post final numbers on the board and to the user *(manual)*
 - [ ] Update project memory with the outcome *(manual)*
 - [ ] Ken regenerates `F_reference.npy` for the new constants (their call; noted on the board)

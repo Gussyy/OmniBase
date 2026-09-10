@@ -102,62 +102,91 @@ and flat and showed the policy a white void with no object in it.
 
 Frames are taken at the rate a policy consumes them (10 Hz, every second frame of the 20 Hz
 recording) and one base has to hold a 21-frame window — the policy's observation plus its
-action chunk. The first task was swept at 1,500 episodes on a 289-placement grid (63 min on 16
-cores); the rest at 600 episodes on a 225-placement grid, because the selection budget holds
-about 9,000 episodes and 3,900 candidates against it is already a choice.
+action chunk. The grid is 0.42 m across at 0.06 m steps (64 placements), 8 cm above the table.
+
+Two sweeps were run. The first, over all 3,900 candidate episodes, used a robot model whose
+gripper frame was 90° off (see "Three mistakes" above); its numbers chose the 3,307 episodes and
+are kept below for the record. The second, over exactly those episodes with the corrected frame,
+is the one the datasets come from. Solving for the real jaws costs 2.1× the time of the wrong
+frame (8.1k against 17.3k solves per second on 16 cores); the corrected sweep took 4.1 h.
+
+Corrected frame, the 3,307 selected episodes plus the 16 VR can episodes:
 
 | task | episodes swept | frames | chunked | one fixed base | episodes ≥90% held |
 |---|---|---|---|---|---|
-| `Prepare_tableware` | 1500 | 225,545 | **89.3%** | 54.9% | 728 |
-| `get_plate_and_spoon_from_dish_rack` | 600 | 89,291 | **81.5%** | 40.9% | 37 |
-| `make_sandwich` | 600 | 88,731 | **81.7%** | 43.4% | 254 |
-| `put_shoes_into_storage_box` | 600 | 114,273 | **75.5%** | 33.3% | 2 |
-| `take_items_out_of_drawer` | 600 | 106,752 | **90.7%** | 58.6% | 340 |
-| **all** | 3900 | 624,592 | **84.8%** | 48.0% | 1361 |
+| `Prepare_tableware` | 1418 | 213,289 | **96.2%** | 75.4% | 1244 |
+| `get_plate_and_spoon_from_dish_rack` | 524 | 78,348 | **93.1%** | 63.5% | 416 |
+| `make_sandwich` | 413 | 62,042 | **53.0%** | 24.4% | 5 |
+| `put_shoes_into_storage_box` | 355 | 68,877 | **83.8%** | 41.0% | 78 |
+| `take_items_out_of_drawer` | 597 | 106,226 | **88.3%** | 49.5% | 277 |
+| `can_v3` (16 VR episodes, `--tcp 0.0748`) | 16 | 1,230 | **77.1%** | 73.1% | 2 |
+| **all** | 3323 | 530,012 | **87.4%** | 58.0% | 2022 |
 
-Pilot, 40 episodes of `put_shoes_into_storage_box`: **80.0% chunked against 39.9% fixed.**
-Pilot, 12 episodes of `Prepare_tableware`: **92.7% chunked against 62.6% fixed.**
+The correction is not uniformly harder. On the same episodes the wrong frame gave the tableware
+90.3% / 55.7%, the dish rack 82.7% / 41.7%, the sandwich 90.1% / 48.7%, the shoes 78.8% / 34.6%,
+the drawer 90.8% / 58.7% and the can 95.0% / 81.7% (chunked / fixed). Four tasks got easier —
+the jaws sit 75 mm further out than the servo did, so the wrist stays further from the table
+and the base — and two got much harder: the sandwich and the can come in low and flat, and
+aiming real jaws at them costs reach. One fixed base gained as well, so OmniBase's margin over
+it narrows from about 36 to 29 points overall. Each task's chunked yield still beats its fixed
+one by 20 to 40 points except the can, where 16 short episodes in one spot leave little to gain.
+
+First pass, wrong frame, all candidates (what the selection was made from):
+
+| task | episodes swept | chunked | one fixed base |
+|---|---|---|---|
+| `Prepare_tableware` | 1500 | 89.3% | 54.9% |
+| `get_plate_and_spoon_from_dish_rack` | 600 | 81.5% | 40.9% |
+| `make_sandwich` | 600 | 81.7% | 43.4% |
+| `put_shoes_into_storage_box` | 600 | 75.5% | 33.3% |
+| `take_items_out_of_drawer` | 600 | 90.7% | 58.6% |
+| **all** | 3900 | 84.8% | 48.0% |
 
 ### What actually limits it
 
 Not reach. **100%** of frames are within 35 cm of *some* candidate base — the arm is long
 enough. The limit is the wrist: an SO-101 has five joints, so its tool must point in the
 vertical plane through its own base, and a human hand does not. Base placement helps precisely
-because moving the base moves that plane, which is why chunking roughly doubles the yield.
+because moving the base moves that plane, which is why chunking lifts the yield from 58% to 87%.
 
 ---
 
 ## The dataset
 
-`select` kept every episode that held at least 70% of its frames somewhere and asked for
-3,307 of them — **31 GB of the 100 GB budget**, because the yield threshold turned out to be the
-real selector and bytes barely discriminate: a FastUMI episode is 10 MB of video whatever it
-contains. The 16 VR can episodes were added to both sets, repeated eight times, so the one scene
-the policy will be tested in is not a rounding error in its training data.
+`select` kept every episode that held at least 70% of its frames somewhere (on the first-pass
+numbers) and asked for 3,307 of them — **31 GB of the 100 GB budget**, because the yield
+threshold turned out to be the real selector and bytes barely discriminate: a FastUMI episode
+is 10 MB of video whatever it contains. The 16 VR can episodes were added to both sets, repeated
+eight times, so the one scene the policy will be tested in is not a rounding error in its
+training data.
 
-Both exports come from the same 3,323 recordings, the same task string, the same 10 Hz, the same
-512x384 wrist clip. The only difference is where the arm was allowed to stand.
+Both exports come from the same 3,323 recordings, the corrected plans, the same task string,
+the same 10 Hz, the same 512x384 wrist clip. The only difference is where the arm was allowed
+to stand.
 
 | | OmniBase (base per window) | one fixed base per episode |
 |---|---|---|
-| output episodes (contiguous runs the arm can hold) | 8,463 | 4,427 |
-| frames at 10 Hz | **256,433** (7.1 h) | 155,945 (4.3 h) |
-| size on disk | 1.4 GB | 815 MB |
-| per-joint step per frame, median / p95 | 1.5° / 9.3° | 1.3° / 8.7° |
-| largest joint step in a frame, median / p95 / worst | 4.3° / 15.2° / 59.7° | 4.0° / 14.1° / 59.3° |
-| export time, 12 processes | 17 min | 9 min |
+| output episodes (contiguous runs the arm can hold) | 9,313 | 5,453 |
+| frames at 10 Hz | **349,382** (9.7 h) | 249,902 (6.9 h) |
+| size on disk | 1.9 GB | 1.4 GB |
+| per-joint step per frame, median / p95 | 1.3° / 10.1° | 1.3° / 10.0° |
+| largest joint step in a frame, median / p95 / worst | 4.3° / 16.8° / 60.0° | 4.2° / 16.8° / 60.0° |
+| median episode | 3.0 s | 3.8 s |
+| export time, 12 processes | 18 min | 11 min |
 
-The fixed-base twin has 61% of the frames. That is less than the 84.8 → 48.0 ratio suggests
+The fixed-base twin has 72% of the frames. That is less than the 87.4 → 58.0 ratio suggests
 because a run also has to be at least 20 frames long to be an episode: frames one fixed base can
-hold come in shorter pieces, and the short pieces are the ones that fall out.
+hold come in shorter pieces, and the short pieces are the ones that fall out. (On the wrong
+frame the twin had 61%; the corrected frame lifted the fixed-base yield more than the chunked
+one.)
 
-The motion is smooth at the joint level — a median step of under 2° per joint per frame at 10 Hz,
-and the wrist roll, the one free joint the solver re-aims, reverses direction in under 1% of
-frames. The worst step in a typical episode is 16°, which is a hand turning fast seen through a
-five-joint arm. Both sets were cut wherever a step exceeded 60°, which is the solver unwinding a
-wrist-roll limit, not the hand.
-Every exported frame puts the gripper within 15 mm and 20° of where the
-hand was; that is checked by forward kinematics on the way out, not assumed.
+The motion is smooth at the joint level — a median step of 1.3° per joint per frame at 10 Hz.
+The worst step in a typical episode is 17°, which is a hand turning fast seen through a
+five-joint arm. Both sets were cut wherever a step exceeded 60°, which is the solver changing
+posture between two frames, not the hand. Every exported frame puts the jaws within 15 mm and
+20° of where the hand's were; that is checked by forward kinematics on the way out, not assumed,
+and the robot model itself is checked against link positions measured in the simulator
+(`tests/test_robots.py`).
 
 ## Training
 
@@ -173,10 +202,10 @@ One run per dataset, identical in every setting but the data:
 |---|---|
 | observation | one 512x384 wrist frame, six joint positions in degrees, one task string |
 | action | 20-step chunk of joint targets at 10 Hz, 10 executed before re-planning |
-| batch / steps | 64 / 25,000 (1.6 M samples: 6 passes over the OmniBase set, 10 over the fixed one) |
+| batch / steps | 64 / 32,500 (2.1 M samples: 6 passes over the OmniBase set, 8 over the fixed one) |
 | precision | bf16 autocast via Accelerate; LeRobot's own `use_amp` cannot unscale the bf16 VLM's gradients on this stack |
 | hardware | one RTX 4070 Ti, 8.5 GB used, 12 loader processes; 0.55 s per step, 116 samples/s, loader wait 5 ms |
-| time | about 3.8 h per run, both local; the RunPod budget was not touched |
+| time | about 5.4 h per run, both local; the RunPod budget was not touched |
 
 Two things were measured before the runs rather than assumed. The loader was checked to keep
 up — video decode is on the CPU and the GPU never waits for it — and the GPU was found to be
@@ -198,9 +227,9 @@ TBD
 
 | | |
 |---|---|
-| downloaded | TBD of a 100 GB budget |
+| downloaded | 31 GB of a 100 GB budget |
 | local GPU | RTX 4070 Ti, 12 GB |
-| rented GPU | TBD of a $10 budget |
+| rented GPU | $0 of a $10 budget |
 
 ## What this does not show
 
