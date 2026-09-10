@@ -376,6 +376,38 @@ Fixed to (0, 0, -0.0748) from the measured fingertip vector, guarded by
 constant that names a direction on the robot -- tool, approach, camera, *and metric* -- gets
 checked against a measurement, not against another constant.
 
+## 10d. The can is picked up (2026-09-10, 22:00-23:20)
+
+Three more things were wrong, all of them in the scene and the measuring, none in the data:
+
+4. **The evaluator's grasp point pointed at the servo.** `SO101_FULL_GRASP_OFFSET` was
+   (0, -0.0748, 0) in `gripper_base` -- the same 90 degree error the retargeting had, surviving
+   in the metric. "reached" was scored 10 cm from the jaws, so no correct grasp could satisfy it.
+   Fixed from the measured fingertip vector; `so101-scene/tests/test_tuning.py` guards it. The
+   base2 policy went from 0/20 to **20/20 reached** on the same rollouts.
+5. **The can was lying down and the jaws closed through it.** The YCB can's mesh is 68 x 102 x 68
+   mm with its long axis along local Y, and the scene passed no rotation, so it lay on its side.
+   `collider_probe.py` measured that, and also that this path reads the config quaternion as
+   (x, y, z, w) -- the default (0,0,0,1) is identity, which is exactly the lying box observed.
+   +90 degrees about x stands it up. Separately, the jaws closed at full travel: 30 mm through a
+   68 mm can, and straight through each other when empty (there is no finger-to-finger collision),
+   which is what the rollout videos showed. They now stop 6 mm inside the can's surface.
+   Before: a replayed demonstration never moved the can by a millimetre. After: it moves.
+6. **Episodes after the first were not fresh trials.** `--max-steps` is the evaluator's own
+   counter, not the task's, so Isaac Lab never reset those environments and each episode carried
+   on from where the last stopped -- measured pixel-identical across the boundary, and nearly
+   every episode ended on the cap. Found because the user noticed episode 2's first video frame
+   was episode 1's last. The scene is now reset explicitly when the cap ends an episode.
+
+With those three fixed, the OmniBase policy **picks the can up in 4 of 4 episodes** at the
+demonstrated position, from a fresh reset each time, and the fixed-base twin reaches equally well
+(4/4) and lifts **0 of 4**. `placed` stays 0: the at-home chunks the fine-tune set is built from
+cover the approach and the grasp and mostly stop before the transport to the box.
+
+The lesson that keeps repeating, now four times over: every constant that names a direction or a
+frame -- tool, approach, camera, metric -- must be checked against a measurement, never against
+another constant. And a guard or a counter that has never been exercised is not one.
+
 ## 11. Where everything is
 
 | what | where |
