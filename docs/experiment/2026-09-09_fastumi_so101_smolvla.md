@@ -239,6 +239,13 @@ above the table because every sweep placed it there; object = YCB `tomato_soup_c
   episodes (`plans2/parts/`, merged by `merge_parts.py`), every pipeline stage skips itself once
   its result exists, training resumes from its last checkpoint, and one command restores the
   whole chain after a reboot: `bash E:\data\out\resume_all.sh`.
+- A guard that has never run is not a guard. The evaluator preflight (added 23:47) first ran at
+  14:50 the next day and crashed on an unset variable; fixed, it then *passed* while parking the
+  arm straight up: it read the packet's radians as degrees, converted again, and compared a
+  1.43-radian drift against a 2-degree threshold. The 0/20 it let through is kept as
+  `eval_omnibase2_badpreflight.json`. Rule now: units in variable names (`q0_rad`, `start_deg`),
+  and every guard is exercised once on a known-good and once on a known-bad input before it
+  is trusted. The preflight also checks that the reset pose is the scene's default (≤15°).
 - The corrected tool point costs solver time: with the jaws off the roll axis `chain.ik` runs
   3.7× slower per solve (can_v3, identical 0.36 M solves: 251 s against 68 s), so the re-sweep
   and the exports take 3.7× the first pass. Same answers, more seeds; posted to Ken.
