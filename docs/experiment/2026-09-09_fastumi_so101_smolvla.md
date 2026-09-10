@@ -314,6 +314,46 @@ selection (`selection5.json`, ≥70% held) was made on the wrong-frame numbers; 
 every contiguous run of ≥20 frames, so low-yield episodes still contribute their reachable
 stretches. Cost: 2.1× the solver time of the first pass (8.1k solves/s against 17.3k).
 
+## 10b. The clean 0/20, and what it was made of (2026-09-10, 15:30-18:30)
+
+With the corrected frame, the corrected action path and a valid preflight, `so101_omnibase2`
+still scored 0/20: every episode timed out with the arm panning away from the can (+43° in 40
+frames) and the jaws never closing. The dumped frames showed the can dead-centre between the
+fingers at the ready pose. Four things were wrong at once, all in how *I* had prepared the can
+demonstrations and the evaluation scene, none in the FastUMI side:
+
+1. **The can was swept without `--home`.** Every one of the 16 VR episodes had its base placed
+   on the grid 3-28 cm from the eval robot's actual base; `at_home` was 0 for all of them. Joint
+   space is base-relative, so the can data described an arm standing somewhere else, and the
+   policy panned toward where that arm's joints would be. OmniBase has the flag for exactly this;
+   I had not passed it.
+2. **With `--home 0,0,0.08`, 0.0% of the can frames are feasible at 20°.** The operator's
+   approach axis is yawed 40-118° from the base bearing (pitched down 54-85°): a 5-DOF arm's
+   tool must lie in the vertical plane through its base, and a human hand does not. Loosening
+   the orientation tolerance -- physically free for an upright cylinder -- gives 31% at 45°, 38%
+   at 60°, 60% at 75°, 72% at 90° (position within 15 mm throughout).
+3. **The eval can stood 8 cm from where every demo grasped it.** The recordings grasp at
+   x 0.186-0.207, y -0.038-0.000 (root frame; the collector writes poses in the robot's root
+   frame); the eval had (0.26, -0.06), read last night off the wrong-frame grasp estimate. Moved
+   to (0.20, -0.01) with the demos' own ±2 cm of spread.
+4. **The VR demos are three-quarters pause.** The operator moves in bursts; resting rows repeat
+   to the millimetre. 55-75% of the exported can rows had a zero joint step (FastUMI: 8%), so the
+   policy was taught to hold still on the one scene it is tested in. Not a slow sampler -- the
+   moving stretches are smooth at 30 fps -- so no interpolation: `E:\data\out\drop_holds.py`
+   writes `datasets/can_v3d`, the same 16 episodes with the paused rows and their video frames
+   removed (3,674 → 1,934 rows, 53%). Motion per 10 Hz row: 7 mm median where it was 0.
+
+Also seen: the VR renders are full-frame (no fisheye border), so the 0.37 ellipse the eval masks
+to -- right for the FastUMI frames -- is not what the can frames looked like in training; the
+fine-tuned policies are evaluated with the can set's own (full-frame) mask. And the eval robot's
+fingers are yellow where the VR gripper's were grey; left as is (the user's call: visuals last).
+
+What runs on it: `can_v3d` swept at home with rot-tol 90 (43% of moving rows at home, episodes
+0/6/11 included), filtered to the at-home chunks (`home_only.py`), exported ×8 as `can_home2`
+(1,952 rows, 80 episodes, median step 2.1°), both policies fine-tuned 3,000 steps on it on the
+rented 4090, then 20 rollouts each in the corrected scene -- alongside the two plain policies
+in the corrected scene (0.37 mask) for the like-for-like pair.
+
 ## 11. Where everything is
 
 | what | where |
