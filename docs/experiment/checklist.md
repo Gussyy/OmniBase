@@ -30,7 +30,7 @@ Ticked as things land. Times are local. Companion to `2026-09-09_fastumi_so101_s
 - [ ] **20 rollouts `so101_omnibase2`** (absolute angles, 8 averaged draws, frames dumped) → `eval_omnibase2.json`
 - [ ] Look at the dumped frames: object in view, fingers where expected *(manual)*
 - [ ] If 0/20: re-export `can_only2` from `plans2/can_v3.json`, fine-tune 3,000 steps, roll out again *(manual decision)*
-- [ ] **Train `so101_fixed2`** 32,500 steps; **20 rollouts** → `eval_fixed2.json`
+- [ ] **Train `so101_fixed2`** 32,500 steps — on a second RunPod 4090 (`pod2`, 165 TFLOPS, $0.79/h) from 13:17, in parallel with the local run; `pod_watch.sh so101_fixed2 pod2` brings the checkpoint home; then **20 rollouts** → `eval_fixed2.json`
 - [ ] Regenerate `docs/FASTUMI_POC.md`: ~~sweep table from `plans2`, dataset table, training, cost~~ (done 09:40), tomato-can results, loss curves, "what this does not show" *(manual)*
 - [ ] Fill §10 of the experiment log; commit; post final numbers on the board and to the user *(manual)*
 - [ ] Update project memory with the outcome *(manual)*
