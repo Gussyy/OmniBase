@@ -30,6 +30,7 @@ Ticked as things land. Times are local. Companion to `2026-09-09_fastumi_so101_s
 - [x] **20 rollouts `so101_omnibase2`** (absolute angles, 8 averaged draws, frames dumped) → `eval_omnibase2.json`: **0/20** (16:00, old scene) and **0/20** (18:40, corrected scene, `eval_omnibase2_scene2.json`); diagnosis in the log §10b: can swept without `--home`, demos infeasible from the fixed base at 20°, can 8 cm off, demos 3/4 pause
 - [x] Fine-tune OmniBase on `can_home2` (at home, pause-free, rot-tol 90) 3,000 steps, roll out in the corrected scene: **0/20** (19:45) — closes the jaws and lifts, in the air; the at-home rows are contorted (90° tolerance) and none is near the ready pose
 - [x] Twin fine-tuned on `can_home2` → rollouts: **0/20** (20:28) — same as the OmniBase one; the at-home data, not the pretraining, is the limit
+- [x] Found bug 4 (21:10): the evaluator's grasp offset pointed at the servo → 'reached' scored 10 cm from the jaws, never true; fixed + `so101-scene/tests/test_tuning.py`; base2 evals rerun
 - [ ] **Robot fixed where the demos are executable** (base 0.18,0.28; 45% of moving rows at the strict 20°, 0% at the original base): `can_base2` export ✓ verified, `eval_tomato_box_base2.yaml` ✓; fine-tune OmniBase → 20 rollouts; plain OmniBase there; twin pair *(pipeline10, armed)*
 - [ ] Look at the dumped frames: object in view, fingers where expected *(manual)*
 - [ ] If 0/20: re-export `can_only2` from `plans2/can_v3.json`, fine-tune 3,000 steps, roll out again *(manual decision)*
