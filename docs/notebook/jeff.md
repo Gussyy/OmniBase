@@ -243,3 +243,28 @@ hide anything; keep both columns anyway.
 - Per-episode plan: 206 episodes, every 5th frame scored (loss x4 noise draws, 8 sampled chunks,
   state perturbed +20 px with the image fixed), one batched rollout per episode from its own
   start (38 policy calls x 0.86 s per batch of 32 envs).
+
+### 22:40 -- flow-matching likelihood probe ran. `scripts/experiment/flow_probe.py`, ~2 min CPU.
+Exact NLL (nats per 5-D action, normalisation Jacobian included) of the re-solved action given
+the re-solved state, and of the base-0 action given the re-solved state; median over 4 directions:
+
+| policy | score | 0 | 2 cm | 4 cm | 6 cm | 8 cm |
+|---|---|---|---|---|---|---|
+| flow, base 0 | NLL(action_b) | -10.4 | -9.4 | -7.5 | -5.4 | -2.5 |
+| flow, base 0 | NLL(action_0) | -10.4 | -5.8 | 4.3 | 16.7 | 36.3 |
+| flow, base 0 | miss of sampled mean | 1.1 | 1.3 | 1.7 | 2.2 | 2.8 |
+| flow, grid   | NLL(action_b) | -9.2 | -9.2 | -9.2 | -9.0 | -8.7 |
+| flow, grid   | NLL(action_0) | -9.2 | -6.1 | 1.8 | 11.1 | 22.7 |
+| flow, grid   | miss of sampled mean | 1.4 | 1.4 | 1.4 | 1.5 | 1.5 |
+
+- The contrast NLL(b) - NLL(0) on the correct action: base-0 policy +7.9 nats at 8 cm, grid
+  policy +0.5. That is the memoriser / generaliser split as a likelihood, no rollout.
+- The grid policy assigns the base-0 action 32 nats LESS at 8 cm: it knows the action must
+  change with the base. Good sign for the metric: it is not just "everything gets less likely
+  off-distribution".
+- The base-0 flow's sampled mean misses only 2.8 cm at 8 cm (the MLP missed 4-10): a SiLU flow
+  conditioned on state extrapolates a bit. Its likelihood still says clearly it is off; the
+  point miss under-reports it. Which is the point of using the likelihood.
+- Caveat: tiny 5-D state-only policies; the image channel is untested. The SmolVLA adapter is
+  the same maths with Hutchinson for the divergence (50-D chunks) -- when there is a checkpoint.
+- Training loss ~0.21-0.23 for both; 4000 steps, batch 512, Euler 40 steps for the ODE.
