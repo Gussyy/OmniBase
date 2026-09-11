@@ -190,3 +190,56 @@ offline metric needed, at least for the reference it is exact for.
 Open: the open-loop replay of a retargeted demo never lifted the can in sim, even with a dwell
 at the grasp. Jaw axis at the closing row unmeasured (probe was cut off by the deletion). Parked:
 the user wants no rollouts, and the offline metric does not need the replay to grasp.
+
+### 21:00 -- user's idea: score the eval data by its likelihood under the policy (LLM-style)
+Diffusion/flow policies are generative over action chunks, so "is this chunk something the
+model would generate" is a density question. Flow matching = CNF, so exact:
+    log p(x1 | obs) = log N(x0) - int_0^1 div v_theta(x_t, t | obs) dt      (x_t along the ODE)
+Divergence by Hutchinson (E_eps eps^T J eps) with 2-4 probe vectors, ~10 Euler steps. Diffusion:
+ELBO from the weighted denoising loss. Cheap proxy for both: the training loss on the chunk,
+averaged over t. Model-agnostic proxy: distance of the true chunk to K sampled chunks.
+Caveats: densities, so relative only (same model, same normalisation); OOD data can still get
+high likelihood (Nalisnick 2019) -- fine for perturbations of in-distribution data, which is
+what the base-shift probe feeds it; scores the whole chunk.
+Why better than my point-prediction probe: multimodal policies average to nowhere; the
+likelihood sees every mode. Also gives per-episode perplexity = outlier/curation tool, and a
+way to say which of two datasets a held-out demo fits better.
+Plan: tiny conditional FM policy on 5-D state -> action (exact div by autograd, no Hutchinson
+needed at 5-D), base-0 vs grid, score = NLL(action_b | state_b). Then a LeRobot adapter that
+uses `policy.forward()` loss + `sample_actions` for SmolVLA when a checkpoint exists.
+
+### 21:10 -- why eval loss != success, and what it does to the probes
+Loss is on the demonstrator's states (policy's own drift never scored); every frame and dim
+weighted equally (success = ~5 grasp frames, 1-2 cm); likelihood rewards covering the human
+variety, success rewards committing to one mode (sharper "overfit" checkpoints roll out
+better); demonstrator noise is in the labels. So: offline scores only as CONTRASTS under a
+controlled perturbation on the same frames (NLL(b) - NLL(0)), only at the grasp rows, only in
+cm against the physical tolerance. They detect one failure mode; they do not predict success.
+To do: `--grasp-window N` in offline_probe.py (rows within N of the jaw-closing row, using the
+grip channel), report both all-frames and grasp-window numbers.
+
+### 21:30 -- test bed for "does the offline score relate to success": PushT + lerobot/diffusion_pusht
+Why PushT: the canonical diffusion-policy task, dataset + checkpoint on the hub, 2-D physics env
+on CPU (seconds per episode), and gym-pusht can reset to a demo's initial state -- so each demo
+episode gets (a) the policy's loss/NLL on its chunks, (b) contrast scores under perturbation,
+(c) the policy's success from that same initial state. Then correlate across episodes. That is
+the honest per-episode version of "loss vs success". Checkpoint-level (lowest val loss is not
+the best checkpoint) would need a training run; later if the per-episode result is interesting.
+Grasp-window numbers on the can probe: same picture as all-frames (replay = shift, grid MLP
+flat ~1.4 cm, deltas < 1 cm), 59 grasp frames at base 0. So on this data the averaging did not
+hide anything; keep both columns anyway.
+
+### 22:10 -- PushT set-up notes (so nobody repeats them)
+- lerobot 0.6.1 + `lerobot/diffusion_pusht` (old checkpoint): its normalisation buffers are
+  REJECTED on load ("unexpected keys"); the processor pipeline must be rebuilt by hand. And the
+  buffers are ImageNet mean/std for the image, not the dataset's stats. Built from dataset
+  stats the policy scores 1/32; the loss looked sane (0.04) and gave no hint. Lesson: a sane
+  loss value is not a check that the observation path is right.
+- gym-pusht needs pymunk < 7 (`add_collision_handler` removed in 7).
+- Original zarr (diffusion-policy site, pusht_cchi_v7_replay.zarr) has the 5-D state incl. the
+  block pose; episode order matches lerobot/pusht (checked ep 0-2). gym-pusht
+  `reset(options={"reset_to_state": state5})` works. Env render == dataset image at the same
+  state (mean abs diff 4.7/255).
+- Per-episode plan: 206 episodes, every 5th frame scored (loss x4 noise draws, 8 sampled chunks,
+  state perturbed +20 px with the image fixed), one batched rollout per episode from its own
+  start (38 policy calls x 0.86 s per batch of 32 envs).

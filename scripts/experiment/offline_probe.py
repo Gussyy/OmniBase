@@ -19,6 +19,7 @@ ap.add_argument("plan"); ap.add_argument("--out", required=True)
 ap.add_argument("--offsets", default="2,4,6,8", help="cm, along +-x and +-y")
 ap.add_argument("--train-grid", default="-6,-3,0,3,6", help="cm; the multi-base policies train on this x*y grid")
 ap.add_argument("--steps", type=int, default=3000)
+ap.add_argument("--grasp-window", type=int, default=5, help="rows either side of the jaw-closing row; success is decided there")
 a = ap.parse_args()
 p = json.load(open(a.plan)); cfg = p["cfg"]; chain = ob.so101()
 pos_tol, rot_tol = cfg["pos_tol"], np.radians(cfg["rot_tol"])
@@ -31,13 +32,21 @@ for rec in p["episodes"]:
                  level=cfg.get("level"), tcp=cfg.get("tcp"), stride=cfg.get("stride", 1) or 1)
     hand = next(h for h in ep.hands if h.name == cfg["hands"]) if cfg.get("hands") else ep.hands[0]
     for ch in rec["chunks"]:
-        s0, s1 = int(ch["start"]), int(ch["stop"]); chunks.append((hand.pos[s0:s1], hand.quat[s0:s1], np.asarray(ch["bases"][0], float)))
+        s0, s1 = int(ch["start"]), int(ch["stop"]); chunks.append((hand.pos[s0:s1], hand.quat[s0:s1], np.asarray(ch["bases"][0], float), hand.grip[s0:s1] if hand.grip is not None else None))
+# the frames that decide a grasp: within --grasp-window of the row the jaws are first told to shut (raw grip < 0);
+# a chunk that starts already shut has no grasp in it
+W = []
+for _, _, _, g in chunks:
+    w = np.zeros(len(g) - 1, bool)
+    if g is not None and (g < 0).any() and (t := int(np.argmax(g < 0))) > 0: w[max(0, t - a.grasp_window):t + a.grasp_window] = True
+    W.append(w)
+W = np.concatenate(W)
 print(f"{len(chunks)} chunks, {sum(len(c[0]) for c in chunks)} frames")
 
 def resolve(b):
     """(state, action, ok) per chunk at base offset b, joints in radians."""
     out = []
-    for pos, quat, base0 in chunks:
+    for pos, quat, base0, _ in chunks:
         q, ok = solve(chain, pos, quat, base0 + b, pos_tol, rot_tol)
         out.append((q[:-1], q[1:], ok[:-1] & ok[1:]))
     return out
@@ -88,12 +97,16 @@ for tag, b in offsets:
     preds = {"replay (base-0 rows)": A0[m], "relative joints (base-0 deltas)": Sb[m] + (A0[m] - S0[m]),
              **{k: f(Sb[m]) for k, f in learned.items()}, "oracle (re-solved)": Ab[m]}
     res[tag] = {k: float(np.median(np.linalg.norm(fk_cm(v) - target, axis=1))) for k, v in preds.items()}
+    wm = W[m]; res[tag].update({k + " @grasp": float(np.median(np.linalg.norm(fk_cm(v[wm]) - target[wm], axis=1))) for k, v in preds.items()} if wm.any() else {})
+    res[tag]["_grasp_frames"] = int(wm.sum())
     res[tag]["_frames"] = int(m.sum()); res[tag]["_feasible"] = float(Mb.mean())
     print(f"{tag:>5}: {int(m.sum()):3d} frames, {100*Mb.mean():.0f}% feasible  " + "  ".join(f"{k.split(' (')[0]} {v:.1f}" for k, v in res[tag].items() if not k.startswith('_')))
 
 out = Path(a.out); out.mkdir(parents=True, exist_ok=True); (out / "results.json").write_text(json.dumps(res, indent=1))
 tags = list(res); lines = ["| policy | " + " | ".join(tags) + " |", "|---|" + "---|" * len(tags)]
 lines += [f"| {n} | " + " | ".join(f"{res[t][n]:.1f}" for t in tags) + " |" for n in names]
+lines += [f"| {n} @grasp | " + " | ".join(f"{res[t].get(n + chr(32) + chr(64) + chr(103) + chr(114) + chr(97) + chr(115) + chr(112), float(chr(110) + chr(97) + chr(110))):.1f}" for t in tags) + " |" for n in names]
+lines += ["| grasp-window frames | " + " | ".join(str(res[t]["_grasp_frames"]) for t in tags) + " |"]
 lines += ["| frames compared | " + " | ".join(str(res[t]["_frames"]) for t in tags) + " |",
           "| re-solve feasible | " + " | ".join(f"{100*res[t]['_feasible']:.0f}%" for t in tags) + " |"]
 (out / "table.md").write_text("median world-frame miss of the predicted next tool point, cm\n\n" + "\n".join(lines) + "\n"); print("\n".join(lines))
