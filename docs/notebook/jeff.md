@@ -268,3 +268,18 @@ the re-solved state, and of the base-0 action given the re-solved state; median 
 - Caveat: tiny 5-D state-only policies; the image channel is untested. The SmolVLA adapter is
   the same maths with Hutchinson for the divergence (50-D chunks) -- when there is a checkpoint.
 - Training loss ~0.21-0.23 for both; 4000 steps, batch 512, Euler 40 steps for the ODE.
+
+### 23:05 -- PushT result: offline scores on a demo do not predict success from its start
+206 episodes x 2 rollouts of lerobot/diffusion_pusht from each demo's own initial state:
+per-rollout success 60% (reported 65%); 90 episodes succeed twice, 68 once, 48 never.
+AUC for "succeeds" (0.5 = nothing): loss 0.55, loss p90 0.55, min sample distance 0.55, mean
+distance 0.55, sample spread 0.48, state reliance 0.57. Spearman vs best coverage: all within
++-0.10. Demo LENGTH -- how long the human took from that start -- has AUC 0.36 (rho -0.14):
+the start's difficulty predicts the policy's success better than anything the model says about
+the demo. 13 starts got coverage 0.0 in both rollouts; their losses are ordinary (0.003-0.012).
+So: measured, not argued. The loss on a demonstration is about how well the model imitates
+that human's path; success from that start is about the policy finding its own path. They are
+different questions. Same for sample distance and the perturbation contrast at the demo's
+states. Offline scores of this kind are instruments for data questions (does the model contain
+this behaviour; is an augmentation safe; is the policy base-invariant), not success predictors.
+Consequence for the library: say so in the docs, and never ship a "predicted success" number.

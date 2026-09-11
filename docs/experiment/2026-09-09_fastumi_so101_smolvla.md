@@ -498,3 +498,33 @@ point-prediction probe under-reports what the likelihood shows plainly. Used as 
 the same frames, the likelihood is the better instrument; used as an absolute score it says
 nothing about success, for the reasons in §11's preamble (measured on the demonstrator's
 states, every frame weighted alike, coverage rewarded over commitment).
+
+**`pusht_probe.py` -- does any offline score relate to success? Measured on PushT.** The
+question the user asked after the likelihood idea: why does evaluation loss not track success?
+Tested on the canonical diffusion-policy task with LeRobot's public checkpoint
+(`lerobot/diffusion_pusht`): every one of the 206 demonstration episodes was scored offline
+under the policy (its denoising loss on the episode's chunks; distance of the chunks to 8
+sampled chunks; sample spread; how far the sampled chunk moves when the agent position is
+perturbed 20 px with the image fixed), and the policy was rolled out twice from that episode's
+own initial state (gym-pusht `reset_to_state`, states from the original zarr). Per-rollout
+success 60% against the reported 65%.
+
+| offline score of the demo | AUC for success from its start | Spearman vs best coverage |
+|---|---|---|
+| denoising loss (mean / p90) | 0.55 / 0.55 | +0.08 / +0.10 |
+| distance to nearest sampled chunk | 0.55 | +0.01 |
+| sample spread | 0.48 | -0.10 |
+| state reliance (perturbation contrast) | 0.57 | +0.07 |
+| *demonstration length (no model)* | *0.36* | *-0.14* |
+
+None of the model-based scores says anything about success (AUC 0.5 is chance); the length of
+the human's demonstration from that start -- a difficulty proxy that needs no model -- does
+better than all of them. Thirteen starts scored zero coverage in both rollouts with ordinary
+losses. The loss on a demonstration measures how well the model imitates that path; success
+from the same start is the policy finding its own. So the offline instruments in this section
+are for data questions -- does the model contain this behaviour, is an augmentation safe, is
+the policy base-invariant -- and not success predictors, and the library should say so.
+
+*Set-up notes:* the old checkpoint's normalisation buffers are rejected by LeRobot 0.6 and are
+ImageNet image statistics, not the dataset's; rebuilt from the checkpoint (with the dataset's
+stats the policy scored 1/32 while its loss looked perfectly sane). gym-pusht needs pymunk < 7.
