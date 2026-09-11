@@ -46,6 +46,8 @@ Ticked as things land. Times are local. Companion to `2026-09-09_fastumi_so101_s
 - [x] Offline base-shift probe (`scripts/experiment/offline_probe.py`): replay = |shift| exactly; base-0 MLP memorises; grid MLP flat to 8 cm; relative joint deltas < 1 cm
 - [x] Action-ambiguity metric (`scripts/experiment/ambiguity.py`): absolute joints lose ~grid half-width, z spread worst; deltas < 0.5 cm; explains the can_multi regression
 - [x] Offline replay row matches the simulator's jaw-to-can distance (6.0/8.0/8.0 vs 6.2/8.1/8.2)
+- [x] Likelihood version of the probe on a flow-matching policy (`flow_probe.py`): exact NLL, grid policy flat, base-0 policy +8 nats at 8 cm
+- [ ] PushT (`pusht_probe.py`): per-episode loss / sample distance / state reliance vs the policy's own success from each demo's start -- running
 - [ ] Adapter to probe a real LeRobot policy (image + state) -- needs a checkpoint; none kept
 - [ ] Held-out demos (not the training chunks) through the same probe
 - [ ] z-shift offsets in the probe (`ambiguity.py` already takes `--zspan`)

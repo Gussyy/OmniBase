@@ -476,3 +476,25 @@ take ~0.6 s, and the demo is 10 cm up by then). Parked -- the offline metric doe
 `E:\data\out` was deleted by the user to clear space (datasets, checkpoints, results, and the
 pipeline scripts that lived there); experiment scripts are versioned under `scripts/experiment/`
 from now on, and the running notebook is `docs/notebook/jeff.md`.
+
+**`flow_probe.py` -- the same probe as an exact likelihood.** A flow-matching policy is a
+continuous normalising flow, so log p(action | state) is exact (divergence integrated backwards
+along the ODE; five autograd calls per step in 5-D). Two tiny conditional flows on the can
+chunks, one trained at base 0 and one on the +-6 cm grid; NLL in nats per action, median over
+the four shift directions:
+
+| policy | score | 0 | 2 cm | 4 cm | 6 cm | 8 cm |
+|---|---|---|---|---|---|---|
+| flow, base 0 | NLL of the re-solved action | -10.4 | -9.4 | -7.5 | -5.4 | -2.5 |
+| flow, base 0 | NLL of the base-0 action | -10.4 | -5.8 | 4.3 | 16.7 | 36.3 |
+| flow, grid | NLL of the re-solved action | -9.2 | -9.2 | -9.2 | -9.0 | -8.7 |
+| flow, grid | NLL of the base-0 action | -9.2 | -6.1 | 1.8 | 11.1 | 22.7 |
+
+The contrast NLL(b) - NLL(0) on the correct action is +7.9 nats for the base-0 policy at 8 cm
+and +0.5 for the grid policy; the grid policy also finds the base-0 action 32 nats less likely
+there, so it is not that everything gets less likely off-distribution -- it knows the action
+must move with the base. The base-0 flow's sampled mean misses only 2.8 cm at 8 cm, so the
+point-prediction probe under-reports what the likelihood shows plainly. Used as a contrast on
+the same frames, the likelihood is the better instrument; used as an absolute score it says
+nothing about success, for the reasons in §11's preamble (measured on the demonstrator's
+states, every frame weighted alike, coverage rewarded over commitment).
