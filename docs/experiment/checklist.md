@@ -41,3 +41,13 @@ Ticked as things land. Times are local. Companion to `2026-09-09_fastumi_so101_s
 - [ ] Update project memory with the outcome *(manual)*
 - [ ] Ken regenerates `F_reference.npy` for the new constants (their call; noted on the board)
 - [ ] Decide what to keep of the wrong-frame artefacts (`so101_omnibase`, `so101_fixed`, `train_*`, ~5 GB): keep for the record unless disk is needed *(manual)*
+
+## Evaluation without rollouts (2026-09-11 evening)
+- [x] Offline base-shift probe (`scripts/experiment/offline_probe.py`): replay = |shift| exactly; base-0 MLP memorises; grid MLP flat to 8 cm; relative joint deltas < 1 cm
+- [x] Action-ambiguity metric (`scripts/experiment/ambiguity.py`): absolute joints lose ~grid half-width, z spread worst; deltas < 0.5 cm; explains the can_multi regression
+- [x] Offline replay row matches the simulator's jaw-to-can distance (6.0/8.0/8.0 vs 6.2/8.1/8.2)
+- [ ] Adapter to probe a real LeRobot policy (image + state) -- needs a checkpoint; none kept
+- [ ] Held-out demos (not the training chunks) through the same probe
+- [ ] z-shift offsets in the probe (`ambiguity.py` already takes `--zspan`)
+- [ ] Relative-EE export, then re-run both tools on it (expect 0)
+- [ ] Open-loop replay never grasps in sim (jaw timing / geometry) -- parked

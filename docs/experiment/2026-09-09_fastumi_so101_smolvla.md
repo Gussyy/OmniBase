@@ -424,3 +424,55 @@ another constant. And a guard or a counter that has never been exercised is not 
 | offline diagnostics | `E:\data\out\offline_{check,chunk,noise,avg}.py`, `measure_circle.py` |
 | measurement scripts | `so101-scene/scripts/{joint_convention_check,playback_check,fk_check}.py` |
 | shared board | `OmniBase/session.md` (gitignored) |
+
+## 11. Evaluation without rollouts (2026-09-11 evening)
+
+Direction change from the user: the library is about robot *data*; solve things by math, no
+simulator in the loop, no new data. Two tools came out of it, both in `scripts/experiment/`,
+both run in about a minute on the 7 executable can chunks (287 frames):
+
+**`offline_probe.py` -- the base-shift probe.** The wrist camera rides on the hand, so a
+demonstration frame's image is the same from any base; only the joint state changes, and
+OmniBase re-solves it for any base. A policy is fed the re-solved state and its predicted next
+joints go through FK; the miss against the re-solved target is in world centimetres. Median miss
+at the tool point:
+
+| policy | 0 | 2 cm | 4 cm | 6 cm | 8 cm |
+|---|---|---|---|---|---|
+| replay of base-0 rows | 0 | 2.0 | 4.0 | 6.0 | 8.0 |
+| relative joint deltas from base 0 | 0 | 0.1-0.2 | 0.2-0.3 | 0.3-0.5 | 0.3-0.8 |
+| kNN / MLP trained at base 0 | 0 / 0.4 | 2.0 / 1.6-2.3 | 3.6-4.0 / 2.7-4.0 | 4.2-6.0 / 3.5-6.4 | 5.1-7.7 / 4.4-9.7 |
+| kNN / MLP trained on a 5x5 grid (+-6 cm) | 0 / 1.4 | 1.0-1.7 / 1.3 | 1.0-2.0 / 1.2 | 0 / 1.3 | 2.0-3.4 / 1.6-1.9 |
+| oracle (re-solved) | 0 | 0 | 0 | 0 | 0 |
+
+Replay misses by exactly the shift, so the metric is calibrated. A state-conditioned policy
+trained at one base is a memoriser under base shift; trained on a base grid it is flat to 8 cm,
+2 cm outside the grid it saw. That is the multi-base augmentation working, for a policy that
+reads its state. The SmolVLA fine-tune (§10) failed on the same augmentation because it is
+image-dominant and the image is base-invariant. The probe would have said so in a minute.
+
+*Cross-check:* the afternoon's simulator replays (§10e, data since deleted) put the fixed
+replay's jaws 6.2 / 8.1 / 8.2 cm from the can at shifts of 6 / 8 / 8 cm. The offline row says
+6.0 / 8.0 / 8.0.
+
+**`ambiguity.py` -- action ambiguity under augmentation.** The miss a policy incurs if it
+cannot tell augmented bases apart and averages their joint actions (median cm, 3x3 grid):
+
+| grid half-width | absolute joints | joint deltas | with +-4 cm z (27 bases): absolute | deltas |
+|---|---|---|---|---|
+| 2 cm | 2.1 | 0.1 | 4.4 | 0.3 |
+| 4 cm | 4.3 | 0.3 | 5.8 | 0.4 |
+| 6 cm | 6.7 | 0.4 | 7.7 | 0.5 |
+
+Averaging absolute joint targets costs about the grid half-width, and height spread is the worst
+of it; `can_multi` (heights 4-16 cm) lost 3.3 cm by the same mechanism. Joint deltas stay under
+0.5 cm; relative end-effector actions are zero by construction. Rule: multi-base augmentation
+with absolute joint targets only for a policy that can tell the bases apart from its state;
+otherwise deltas or EE-relative.
+
+*Also this evening:* the open-loop replay of a retargeted demo never lifted the can in the
+simulator, even with the jaws given time to close (the VR gripper shut instantly; these jaws
+take ~0.6 s, and the demo is 10 cm up by then). Parked -- the offline metric does not need it.
+`E:\data\out` was deleted by the user to clear space (datasets, checkpoints, results, and the
+pipeline scripts that lived there); experiment scripts are versioned under `scripts/experiment/`
+from now on, and the running notebook is `docs/notebook/jeff.md`.
