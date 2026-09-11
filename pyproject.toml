@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omnibase"
-version = "0.2.0"
-description = "Place a robot base per training window so free-flown gripper demonstrations become reachable"
+version = "0.3.0"
+description = "Where would the robot have to stand? Retarget hand-held demonstrations, and evaluate data and policies without a simulator"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -13,9 +13,14 @@ dependencies = ["numpy>=1.22", "scipy>=1.8"]
 
 [project.optional-dependencies]
 data = ["pandas>=1.5", "pyarrow>=10"]
+service = ["fastapi>=0.100", "uvicorn>=0.23", "pydantic>=2"]
+all = ["pandas>=1.5", "pyarrow>=10", "fastapi>=0.100", "uvicorn>=0.23", "pydantic>=2"]
 
 [project.scripts]
 omnibase = "omnibase.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["omnibase*"]
+
+[tool.setuptools.package-data]
+omnibase = ["ui/*.html"]

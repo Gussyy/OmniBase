@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>omnibase</title>
+<style>
+  * { box-sizing:border-box }
+  body { margin:0; font:13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; color:#111; background:#fff }
+  header { padding:10px 16px; border-bottom:1px solid #111; display:flex; gap:24px; align-items:baseline }
+  header b { font-size:14px } header span { color:#555 }
+  main { display:grid; grid-template-columns: 360px 1fr; min-height:calc(100vh - 38px) }
+  @media (max-width: 860px) { main { grid-template-columns:1fr } }
+  nav { border-right:1px solid #111; padding:12px 16px }
+  section { padding:12px 16px; min-width:0 }
+  .tools { display:flex; gap:0; margin-bottom:12px; border:1px solid #111 }
+  .tools button { flex:1; border:0; border-right:1px solid #111; background:#fff; padding:5px 0; font:inherit; cursor:pointer }
+  .tools button:last-child { border-right:0 } .tools button.on { background:#111; color:#fff }
+  .f { display:grid; grid-template-columns: 120px 1fr; gap:4px 8px; align-items:center }
+  .f label { color:#555; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .f input { width:100%; padding:3px 5px; border:1px solid #bbb; font:inherit; background:#fff } .f input:focus { outline:none; border-color:#111 }
+  .run { margin-top:10px; padding:5px 14px; border:1px solid #111; background:#fff; font:inherit; cursor:pointer } .run:hover { background:#111; color:#fff } .run:disabled { opacity:.4 }
+  .help { color:#555; margin-top:10px; border-top:1px solid #ddd; padding-top:8px }
+  .cmd { color:#555; margin-top:8px; word-break:break-all }
+  .jobs { margin-top:16px; border-top:1px solid #111; padding-top:8px }
+  .jobs div { padding:2px 0; cursor:pointer; display:grid; grid-template-columns: 52px 72px 1fr; gap:8px } .jobs div:hover { background:#f0f0f0 }
+  .queued { color:#888 } .running { color:#111 } .done { color:#111 } .failed { color:#b00 }
+  h2 { font-size:13px; font-weight:bold; margin:0 0 4px } h3 { font-size:13px; font-weight:normal; color:#555; margin:16px 0 4px }
+  pre { margin:0; padding:8px; border:1px solid #bbb; overflow:auto; max-height:320px; white-space:pre; font:inherit; background:#fafafa }
+  table { border-collapse:collapse; margin:4px 0 } th, td { border:1px solid #bbb; padding:2px 8px; text-align:right } th:first-child, td:first-child { text-align:left } th { font-weight:normal; color:#555 }
+  canvas { border:1px solid #bbb; max-width:100%; display:block }
+  a { color:#111 }
+  .kv { display:grid; grid-template-columns:max-content 1fr; gap:2px 12px } .kv span:nth-child(odd) { color:#555 }
+</style>
+</head>
+<body>
+<header><b>omnibase</b><span id="ver"></span><span>where would the robot have to stand</span></header>
+<main>
+  <nav>
+    <div class="tools" id="tabs"></div>
+    <form class="f" id="form" onsubmit="return false"></form>
+    <button class="run" id="run">run</button>
+    <div class="cmd" id="cmd"></div>
+    <div class="help" id="hint"></div>
+    <div class="jobs" id="jobs"></div>
+  </nav>
+  <section>
+    <h2 id="title">no job selected</h2>
+    <div id="status"></div>
+    <div id="result"></div>
+    <h3>output</h3>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script>
+// Labels are the CLI flags: what the page runs is `omnibase <tool> <positional> --flag value`, shown under the button.
+const TOOLS = {
+  place: { pos: "dataset", hint: "Executable frames from every candidate base, summed over the dataset. Takes a dataset (runs the sweep) or a PLANS.json from an earlier run. Writes the map and the best bases.",
+    fields: [["dataset","dataset | PLANS.json",""],["robot","--robot","so101"],["hands","--hands",""],["column","--column","action"],["tcp","--tcp (m)",""],["stride","--stride","1"],
+             ["step","--step (m)","0.05"],["span","--span (m)","0.42"],["height","--height (m)","0.08"],["home","--home x,y,z",""],["window","--window","21"],["pos_tol","--pos-tol (m)","0.015"],["rot_tol","--rot-tol (deg)","20"],["workers","--workers","4"],["frame","--frame",""],["level","--level",""]] },
+  report: { pos: "plans", hint: "The dataset as the robot sees it: yield for fixed vs per-window bases, grasp events, still frames, workspace, the base map. Markdown.",
+    fields: [["plans","PLANS.json",""]] },
+  ambiguity: { pos: "plans", hint: "Is base augmentation safe for this action space? The miss at the tool if a policy averages the joint actions of a base grid. No training.",
+    fields: [["plans","PLANS.json",""],["spans","--spans (cm)","2,4,6"],["zspan","--zspan (cm)","0"],["hands","--hands",""],["limit","--limit",""]] },
+  probe: { pos: "plans", hint: "Does a policy know where it stands? Miss at the tool against a base shift, between replay (= the shift) and the re-solved oracle (= 0). No rollout. A policy is module:attr importable from the server's working directory. This does not predict success.",
+    fields: [["plans","PLANS.json",""],["offsets","--offsets (cm)","2,4,6,8"],["knn_grid","--knn-grid (cm)","-6,-3,0,3,6"],["grasp_rows","--grasp-rows","5"],["policy","--policy",""],["hands","--hands",""],["limit","--limit",""]] },
+};
+let tool = "place", current = null, timer = null;
+const $ = id => document.getElementById(id);
+function tabs() { $("tabs").innerHTML = Object.keys(TOOLS).map(t => `<button class="${t===tool?'on':''}" onclick="pick('${t}')">${t}</button>`).join(""); }
+function pick(t) { tool = t; tabs(); form(); }
+function form() {
+  const f = TOOLS[tool]; $("hint").textContent = f.hint;
+  $("form").innerHTML = f.fields.map(([k, label, def]) => `<label title="${label}">${label}</label><input name="${k}" value="${def}" oninput="cmdline()">`).join("");
+  cmdline();
+}
+function args() { const a = {}; for (const el of $("form").elements) if (el.value !== "") a[el.name] = el.value; return a; }
+function cmdline() {
+  const a = args(), pos = TOOLS[tool].pos;
+  $("cmd").textContent = "$ omnibase " + tool + " " + (a[pos] || "…") + Object.entries(a).filter(([k]) => k !== pos).map(([k, v]) => ` --${k.replace(/_/g, "-")} ${v}`).join("");
+}
+async function run() {
+  $("run").disabled = true;
+  const r = await fetch("/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tool, args: args() }) });
+  $("run").disabled = false;
+  if (!r.ok) { $("status").textContent = (await r.json()).detail; return; }
+  const j = await r.json(); watch(j.id); jobs();
+}
+async function jobs() {
+  const list = await (await fetch("/jobs")).json();
+  $("jobs").innerHTML = list.map(j => `<div onclick="watch('${j.id}')"><span class="${j.status}">${j.status}</span><span>${j.tool}</span><span>${j.id}</span></div>`).join("") || "<span class='queued'>no jobs yet</span>";
+}
+function watch(id) { current = id; clearInterval(timer); poll(); timer = setInterval(poll, 1500); }
+async function poll() {
+  const j = await (await fetch("/jobs/" + current)).json();
+  $("title").textContent = `${j.tool}  ${j.id}`;
+  $("status").innerHTML = `<span class="${j.status}">${j.status}</span>` + (j.error ? "  " + esc(j.error) : "") + `<div class="cmd">$ ${esc(j.argv.slice(2).join(" "))}</div>`;
+  $("log").textContent = await (await fetch(`/jobs/${current}/log`)).text(); $("log").scrollTop = $("log").scrollHeight;
+  if (j.status === "done" || j.status === "failed") { clearInterval(timer); jobs(); $("result").innerHTML = ""; if (j.status === "done") render(j); }
+}
+async function render(j) {
+  const r = await fetch(`/jobs/${j.id}/result`); if (!r.ok) return;
+  const dl = `<h3><a href="/jobs/${j.id}/result" target="_blank">result file</a></h3>`;
+  if (j.tool === "report") { $("result").innerHTML = dl + `<pre style="max-height:none">${esc(await r.text())}</pre>`; return; }
+  const d = await r.json();
+  if (j.tool === "place") return place(d, dl);
+  if (j.tool === "ambiguity") return $("result").innerHTML = dl + table(["base spread ± cm","bases","frames held by all","absolute joints: miss cm (p90)","joint deltas: miss cm (p90)","end-effector"],
+      d.map(x => [x.span_cm, x.bases, x.frames, x.absolute_cm==null?"-":`${x.absolute_cm.toFixed(1)} (${x.absolute_p90_cm.toFixed(1)})`, x.delta_cm==null?"-":`${x.delta_cm.toFixed(1)} (${x.delta_p90_cm.toFixed(1)})`, 0]));
+  if (j.tool === "probe") return probe(d, dl);
+  $("result").innerHTML = dl + `<pre>${esc(JSON.stringify(d, null, 1))}</pre>`;
+}
+function probe(d, dl) {
+  const radii = ["0", ...[...new Set(d.offsets.filter(t => t !== "0").map(t => t.slice(2)))].sort((a, b) => a - b)];
+  const tagsAt = r => r === "0" ? ["0"] : d.offsets.filter(t => t !== "0" && t.slice(2) === r);
+  const at = (n, r, key) => { const v = tagsAt(r).map(t => d.rows[t][n] && d.rows[t][n][key]).filter(x => x != null); return v.length ? median(v).toFixed(1) : "-"; };
+  const mk = key => table(["", ...radii.map(r => r + " cm")], d.names.map(n => [n, ...radii.map(r => at(n, r, key))]).concat([["re-solve feasible", ...radii.map(r => (100 * median(tagsAt(r).map(t => d.rows[t].feasible))).toFixed(0) + "%")]]));
+  let h = dl + "<h3>median miss at the tool point, cm, all frames</h3>" + mk("miss_cm");
+  if (d.rows["0"].grasp_frames) h += `<h3>same, within the grasp rows (${d.rows["0"].grasp_frames} frames)</h3>` + mk("grasp_cm");
+  if (Object.values(d.rows["0"]).some(v => v && v.nll != null)) h += "<h3>NLL of the re-solved action, nats</h3>" + mk("nll") + "<h3>NLL of the unshifted action at the shifted state</h3>" + mk("nll_replay");
+  $("result").innerHTML = h;
+}
+function place(d, dl) {
+  let h = dl + `<div class="kv"><span>episodes</span><span>${d.totals.episodes}</span><span>frames</span><span>${d.totals.frames}</span>
+    <span>best fixed base per episode</span><span>${(100*d.totals.fixed_per_episode).toFixed(1)}% of frames</span><span>one base per window</span><span>${(100*d.totals.chunked).toFixed(1)}%</span>`
+    + (d.totals.at_home != null ? `<span>from the robot's own base</span><span>${(100*d.totals.at_home).toFixed(1)}%</span>` : "") + "</div>";
+  for (const [name, hd] of Object.entries(d.hands)) {
+    h += `<h3>hand ${name}</h3><div class="kv"><span>stand at</span><span>(${hd.best.base.map(v => v.toFixed(2)).join(", ")}) m: ${(100*hd.best.fraction).toFixed(1)}% of ${hd.frames} frames from one fixed base</span>`
+      + (hd.home ? `<span>own base</span><span>(${hd.home.base.map(v=>v.toFixed(2)).join(", ")}) m: ${(100*hd.home.fraction).toFixed(1)}%</span>` : "") + `</div><canvas id="map_${name}" width="480" height="480" style="margin-top:6px"></canvas>`;
+  }
+  $("result").innerHTML = h;
+  for (const [name, hd] of Object.entries(d.hands)) heat($("map_" + name), d.cells, hd.executable.map(v => v / hd.frames), hd.best.base, hd.home && hd.home.base);
+}
+function heat(cv, cells, frac, best, home) {
+  const xs = [...new Set(cells.map(c => c[0]))].sort((a, b) => a - b), ys = [...new Set(cells.map(c => c[1]))].sort((a, b) => a - b);
+  const ctx = cv.getContext("2d"), pad = 40, W = cv.width - pad - 8, H = cv.height - pad - 8, cw = W / ys.length, ch = H / xs.length, top = Math.max(...frac, 1e-9);
+  const X = iy => pad + iy * cw, Y = ix => 8 + (xs.length - 1 - ix) * ch;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  cells.forEach((c, i) => { const g = frac[i] <= 0 ? 255 : Math.round(235 - 215 * frac[i] / top); ctx.fillStyle = `rgb(${g},${g},${g})`; ctx.fillRect(X(ys.indexOf(c[1])), Y(xs.indexOf(c[0])), cw - 1, ch - 1); });
+  ctx.font = "11px ui-monospace, monospace"; ctx.fillStyle = "#555"; ctx.textAlign = "center";
+  ys.forEach((y, i) => { if (i % Math.ceil(ys.length / 8) === 0) ctx.fillText(y.toFixed(2), X(i) + cw / 2, cv.height - 16); });
+  ctx.textAlign = "right"; xs.forEach((x, i) => { if (i % Math.ceil(xs.length / 8) === 0) ctx.fillText(x.toFixed(2), pad - 4, Y(i) + ch * .65); });
+  ctx.textAlign = "center"; ctx.fillText("y (m)", pad + W / 2, cv.height - 3);
+  ctx.save(); ctx.translate(10, 8 + H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText("x (m)", 0, 0); ctx.restore();
+  const mark = (b, col, txt, below) => { const ix = xs.indexOf(b[0]), iy = ys.indexOf(b[1]); if (ix < 0 || iy < 0) return; ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.strokeRect(X(iy) + 1, Y(ix) + 1, cw - 3, ch - 3); ctx.fillStyle = col; ctx.fillText(txt, X(iy) + cw / 2, Y(ix) + (below ? ch + 11 : -3)); };
+  mark(best, "#111", "best"); if (home) mark(home, "#b00", "own", true);
+}
+function table(head, rows) { return `<table><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</table>`; }
+function median(v) { const s = [...v].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+fetch("/health").then(r => r.json()).then(h => $("ver").textContent = "v" + (h.version || "")).catch(() => {});
+$("run").onclick = run; tabs(); form(); jobs();
+</script>
+</body>
+</html>

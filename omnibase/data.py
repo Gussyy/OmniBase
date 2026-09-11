@@ -339,6 +339,41 @@ def _apply_frame(hand, r):
     return hand
 
 
+def pick_hands(ep, spec=None):
+    """The episode's hands, filtered by a spec of names or indices (``"right"``, ``"0,1"``)."""
+    hands = list(ep.hands)
+    if not spec:
+        return hands
+    chosen = []
+    for w in [w.strip() for w in str(spec).split(",") if w.strip()]:
+        if w.isdigit() and int(w) < len(hands):
+            chosen.append(hands[int(w)])
+        else:
+            match = [h for h in hands if h.name == w]
+            if not match:
+                raise ValueError(f"no hand {w!r}; this episode has {[h.name for h in hands]}")
+            chosen.append(match[0])
+    return chosen
+
+
+def holds(pos, grip=None, mm=2.0):
+    """Frames where the hand stood still: moved under ``mm`` from the frame before, jaw unchanged.
+
+    A hand-held recording pauses -- the operator lines up, waits, thinks -- and every paused
+    frame is one more copy of the same state with the same action. On the can recordings
+    that was 47% of the rows. They are not wrong, but a policy trained on them learns to wait.
+    """
+    pos = np.asarray(pos, dtype=float)
+    still = np.zeros(len(pos), dtype=bool)
+    if len(pos) < 2:
+        return still
+    still[1:] = np.linalg.norm(np.diff(pos, axis=0), axis=1) < mm / 1000.0
+    if grip is not None:
+        g = np.asarray(grip, dtype=float)
+        still[1:] &= np.abs(np.diff(g)) < 1e-6
+    return still
+
+
 def table_height(pos, grip, low=10.0):
     """Where the surface is, in an already-levelled episode: under its lowest grasps.
 

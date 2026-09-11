@@ -25,10 +25,11 @@ from .plan import (SCORE_TERMS, Chunk, Mount, arm_bases, ascii_map, base_grid,
                    best_fixed, best_spot, chunk, feasibility, home_index,
                    home_share, mount_feasibility, solve,
                    mount_grid, pair, score_map, yield_curve)
+from .eval import ambiguity, chunks_from_plan, grasp_window, knn_policy, probe, resolve
 from .robots import describe, so101
 from .robots import load as load_robot   # ob.load is the DATASET loader
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 __all__ = [
     "Chain", "Joint", "Chunk",
     "base_grid", "best_fixed", "chunk", "feasibility", "solve", "yield_curve",
@@ -38,4 +39,5 @@ __all__ = [
     "so101", "load_robot", "describe",
     "load", "describe_dataset", "Episode", "Hand",
     "from_parquet", "normalise_quats",
+    "ambiguity", "probe", "resolve", "chunks_from_plan", "grasp_window", "knn_policy",
 ]

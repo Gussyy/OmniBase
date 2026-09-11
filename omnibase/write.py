@@ -129,12 +129,13 @@ class Writer:
     """
 
     def __init__(self, root, fps, names, video_key="observation.images.wrist",
-                 size=(512, 384), robot_type="so101"):
+                 size=(512, 384), robot_type="so101", meta=None):
         self.root = Path(root)
         if (self.root / "meta" / "info.json").exists():
             raise FileExistsError(f"{self.root} already holds a dataset; point --out elsewhere")
         self.fps, self.names = int(fps), list(names)
         self.video_key, self.size, self.robot_type = video_key, tuple(size), robot_type
+        self.meta = dict(meta or {})     # written into meta/omnibase.json for whoever reads it
         self.episodes, self.tasks, self.frames = [], {}, 0
         self._acc = {}
         self._boxes = []          # one lit box per episode; the ellipse is their median, not their union
@@ -312,7 +313,7 @@ class Writer:
         # Beside LeRobot's own metadata, not inside it: what a reader needs to reproduce this
         # dataset's view at deployment. LeRobot warns about keys it does not know, and it is
         # right to -- this is OmniBase's business, not the format's.
-        extra = dict(camera=self.video_key, size=list(self.size))
+        extra = dict(camera=self.video_key, size=list(self.size), **self.meta)
         if self._boxes:
             # The median over episodes. A union grows to the frame on one source that fills its
             # rectangle or one bright speck; a policy then gets shown twice the picture it saw.

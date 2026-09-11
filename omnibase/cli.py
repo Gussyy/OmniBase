@@ -14,8 +14,9 @@ from pathlib import Path
 
 import numpy as np
 
-from .data import FRAMES, contacts, describe_dataset, episodes, fit_level, load
-from .plan import (SCORE_TERMS, arm_bases, ascii_map, base_grid, best_fixed, best_spot,
+from .data import (FRAMES, contacts, describe_dataset, episodes, fit_level, holds, load,
+                   pick_hands)
+from .plan import (SCORE_TERMS, arm_bases, ascii_map, base_grid, best_fixed, best_spot, home_index,
                    chunk, feasibility, home_share, mount_feasibility, mount_grid, pair,
                    score_map, solve, yield_curve)
 from .robots import describe
@@ -49,20 +50,10 @@ def _mount(a, hands):
 
 
 def _pick(ep, spec):
-    """The episode's hands, filtered by a --hands string, which takes names or indices."""
-    hands = list(ep.hands)
-    if not spec:
-        return hands
-    chosen = []
-    for w in [w.strip() for w in spec.split(",") if w.strip()]:
-        if w.isdigit() and int(w) < len(hands):
-            chosen.append(hands[int(w)])
-        else:
-            match = [h for h in hands if h.name == w]
-            if not match:
-                raise SystemExit(f"no hand {w!r}; this episode has {[h.name for h in hands]}")
-            chosen.append(match[0])
-    return chosen
+    try:
+        return pick_hands(ep, spec)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
 
 
 def _frame_args(a):
@@ -184,6 +175,13 @@ def _sweep_one(episode):
         return dict(episode=int(ep.index), frames=int(ep.frames),
                     hands=[h.name for h in hands],
                     solves=int(len(cells) * ep.frames * len(hands)),
+                    # what `place` and `report` aggregate without loading the dataset again
+                    reach=[F.sum(axis=0).astype(int).tolist() for F in Fs],
+                    grasps=[int(len(contacts(h.grip, closing=True))) if h.grip is not None else None
+                            for h in hands],
+                    still=[int(holds(h.pos, h.grip).sum()) for h in hands],
+                    extent=[[[round(float(v), 3) for v in h.pos.min(0)],
+                             [round(float(v), 3) for v in h.pos.max(0)]] for h in hands],
                     held=[round(float(v), 4) for v in held.mean(axis=1)],
                     at_home=[round(float(v), 4) for v in home_share(chunks, ep.frames)],
                     fixed=[round(float(best_fixed(F, cells)[1]), 4) for F in Fs],
@@ -554,6 +552,12 @@ def _export_one(job):
                     # The action is where the arm goes NEXT. The last frame has nowhere to go,
                     # so it holds -- which is also what the arm does at the end of an episode.
                     action = np.vstack([state[1:], state[-1:]])
+                    if c.get("action_space") == "delta":
+                        # next minus current for the joints; the jaw stays a target. Measured
+                        # (docs/experiment, section 11): a base shift of 8 cm costs absolute
+                        # targets 8 cm at the tool and deltas under 1 cm.
+                        action = action.copy()
+                        action[:, :-1] -= state[:, :-1]
                     stage = Path(c["stage"]) / f"{si}_{rec['episode']}_{a}_{ci}_{ri}.mp4"
                     slice_video(vid, stage, (s0 + r0) * stride, (s0 + r1) * stride, stride,
                                 c["fps"], c["size"], crf=c["crf"], offset=offset)
@@ -638,7 +642,8 @@ def cmd_export(a):
     stage.mkdir(parents=True, exist_ok=True)
     w, h = (int(v) for v in a.size.lower().split("x"))
     cfg = dict(sources=sources, stage=str(stage), fps=a.fps, size=(w, h), crf=a.crf,
-               min_frames=a.min_frames, fixed_base=bool(a.fixed_base), max_step=a.max_step)
+               min_frames=a.min_frames, fixed_base=bool(a.fixed_base), max_step=a.max_step,
+               action_space=a.action)
 
     jobs = [(i, rec) for i, d in enumerate(docs) for rec in d["episodes"]
             if "error" not in rec and (not a.fixed_base or rec.get("fixed_base"))]
@@ -666,7 +671,11 @@ def cmd_export(a):
     names = ["shoulder_pan.pos", "shoulder_lift.pos", "elbow_flex.pos", "wrist_flex.pos",
              "wrist_roll.pos", "gripper.pos"]
     out = Writer(a.out, fps=a.fps, names=names, video_key=f"observation.images.{a.key}",
-                 size=(w, h), robot_type=sources[0]["cfg"].get("robot", "so101"))
+                 size=(w, h), robot_type=sources[0]["cfg"].get("robot", "so101"),
+                 meta=dict(action_space=a.action, action_note=(
+                     "joint deltas: action[:5] = next joints - current joints (degrees); "
+                     "gripper.pos is a target" if a.action == "delta" else
+                     "absolute joint targets in degrees; gripper.pos 0 closed .. 100 open")))
     for r in good:
         i = out.add(r["state"], r["action"], r["task"], r["video"])
         rep = repeats[r["src"]] or 1
@@ -688,6 +697,182 @@ def cmd_export(a):
     if len(bad) > 10:
         print(f"  ... and {len(bad) - 10} more")
     print(f"\nwrote {root}")
+
+
+
+# ---- what ships as one command each --------------------------------------------------------
+
+def _doc(path):
+    doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    if "cfg" not in doc:
+        raise SystemExit(f"{path}: written by an older sweep; re-run `omnibase sweep --out`")
+    return doc
+
+
+def _sweep_doc(a):
+    """A plan document: the file given, or a fresh sweep of the dataset written to --out."""
+    if str(a.dataset).lower().endswith(".json"):
+        return _doc(a.dataset)
+    if not a.out:
+        a.out = str(Path(a.dataset).with_suffix("")) + "_plans.json"
+    cmd_sweep(a)
+    return _doc(a.out)
+
+
+def placement(doc):
+    """Executable frames per base, summed over a sweep: ``(cells, per_hand, frames, totals)``.
+
+    ``per_hand[name]`` is a ``(cells,)`` array of frames that hand can hold from each base;
+    ``totals`` has the dataset-wide frame count and the chunked / best-fixed / at-home yields.
+    """
+    cfg = doc["cfg"]
+    cells = base_grid(span=cfg["span"], step=cfg["step"], height=cfg["height"])
+    good = [r for r in doc["episodes"] if "error" not in r and r.get("reach")]
+    if not good:
+        raise SystemExit("this sweep has no per-cell counts; re-run `omnibase sweep --out` with this version")
+    per, frames = {}, {}
+    for r in good:
+        for name, reach in zip(r["hands"], r["reach"]):
+            per[name] = per.get(name, np.zeros(len(cells))) + np.asarray(reach, float)
+            frames[name] = frames.get(name, 0) + r["frames"]
+    tot = sum(r["frames"] for r in good)
+
+    def share(key):
+        return sum(sum(r[key]) / max(len(r[key]), 1) * r["frames"] for r in good) / max(tot, 1)
+
+    totals = dict(episodes=len(good), frames=tot, chunked=share("held"), fixed_per_episode=share("fixed"),
+                  at_home=share("at_home") if cfg.get("home") else None)
+    return cells, per, frames, totals
+
+
+def cmd_place(a):
+    """Where should the robot stand for this dataset? Executable frames from every base."""
+    doc = _sweep_doc(a)
+    cells, per, frames, totals = placement(doc)
+    cfg = doc["cfg"]
+    result = dict(dataset=doc["dataset"], robot=doc["robot"], cells=cells.tolist(),
+                  pos_tol=cfg["pos_tol"], rot_tol_deg=cfg["rot_tol"], totals=totals, hands={})
+    print(f"{totals['episodes']} episodes, {totals['frames']} frames, {len(cells)} candidate bases "
+          f"(step {cfg['step']:g} m, height {cfg['height']:g} m)\n")
+    for name, counts in per.items():
+        frac = counts / max(frames[name], 1)
+        order = np.argsort(frac)[::-1]
+        best = int(order[0])
+        print(f"hand {name!r}: {frames[name]} frames")
+        print(f"  stand at ({cells[best][0]:+.2f}, {cells[best][1]:+.2f}, {cells[best][2]:+.2f}) m: "
+              f"{100 * frac[best]:.1f}% of frames executable from one fixed base")
+        for i in order[1:a.top]:
+            print(f"         ({cells[i][0]:+.2f}, {cells[i][1]:+.2f}, {cells[i][2]:+.2f}) m: {100 * frac[i]:.1f}%")
+        home = None
+        if cfg.get("home"):
+            h = home_index(cells, cfg["home"])
+            home = dict(base=cfg["home"], fraction=float(frac[h]))
+            print(f"  from the robot's own base {tuple(cfg['home'])}: {100 * frac[h]:.1f}%")
+        print(ascii_map(dict(cells=cells, coverage=frac, score=frac), "score"))
+        result["hands"][name] = dict(frames=frames[name], executable=counts.astype(int).tolist(),
+                                     best=dict(base=cells[best].tolist(), fraction=float(frac[best])), home=home)
+        print()
+    print(f"whole dataset: best fixed base per episode holds {100 * totals['fixed_per_episode']:.1f}% of frames, "
+          f"one base per {cfg['window']}-frame window holds {100 * totals['chunked']:.1f}%")
+    if a.place_out:
+        Path(a.place_out).write_text(json.dumps(result, indent=1), encoding="utf-8")
+        print(f"\nwrote {a.place_out}")
+
+
+def report(doc):
+    """A dataset, as seen by a robot: what a fixed base loses, what the demonstrations contain."""
+    cfg = doc["cfg"]
+    cells, per, frames, totals = placement(doc)
+    good = [r for r in doc["episodes"] if "error" not in r]
+    bad = [r for r in doc["episodes"] if "error" in r]
+    L = [f"# {Path(doc['dataset']).name} as seen by {doc['robot']}", "",
+         f"{len(good)} episodes ({len(bad)} unreadable), {totals['frames']} frames, "
+         f"tolerances {1000 * cfg['pos_tol']:g} mm / {cfg['rot_tol']:g} deg, window {cfg['window']} frames.", "",
+         "## Yield", "", "| | frames held |", "|---|---|"]
+    for name, counts in per.items():
+        frac = counts / max(frames[name], 1); b = int(frac.argmax())
+        L.append(f"| best single fixed base for the whole dataset, hand {name!r} at ({cells[b][0]:+.2f}, {cells[b][1]:+.2f}) | {100 * frac[b]:.1f}% |")
+    L.append(f"| best fixed base chosen per episode | {100 * totals['fixed_per_episode']:.1f}% |")
+    L.append(f"| one base per {cfg['window']}-frame window (OmniBase) | {100 * totals['chunked']:.1f}% |")
+    if cfg.get("home"):
+        L.append(f"| the robot's own base {tuple(cfg['home'])}, windows served from there | {100 * totals['at_home']:.1f}% |")
+    chunks = [c for r in good for c in r.get("chunks", [])]
+    lens = [c["stop"] - c["start"] for c in chunks]
+    L += ["", "## What the demonstrations contain", "", "| | |", "|---|---|",
+          f"| chunks (one base each) | {len(chunks)}, median {int(np.median(lens)) if lens else 0} frames |"]
+    for i, name in enumerate(per):
+        gr = [r["grasps"][i] for r in good if r.get("grasps") and r["grasps"][i] is not None]
+        st = [r["still"][i] for r in good if r.get("still")]
+        ex = np.array([r["extent"][i] for r in good if r.get("extent")])
+        if gr:
+            L.append(f"| grasp events, hand {name!r} | {sum(gr)} ({np.mean(gr):.1f} per episode) |")
+        if st:
+            L.append(f"| still frames, hand {name!r} (moved < 2 mm, jaw unchanged) | {sum(st)} = {100 * sum(st) / max(frames[name], 1):.0f}% of frames |")
+        if len(ex):
+            lo, hi = ex[:, 0].min(0), ex[:, 1].max(0)
+            L.append(f"| workspace, hand {name!r} | x {lo[0]:+.2f}..{hi[0]:+.2f}, y {lo[1]:+.2f}..{hi[1]:+.2f}, z {lo[2]:+.2f}..{hi[2]:+.2f} m |")
+    L += ["", "## Executable frames per base", ""]
+    for name, counts in per.items():
+        frac = counts / max(frames[name], 1)
+        L += [f"hand {name!r}:", "", "```", ascii_map(dict(cells=cells, coverage=frac, score=frac), "score"), "```", ""]
+    if bad:
+        L += ["## Unreadable episodes", ""] + [f"- episode {r['episode']}: {r['error']}" for r in bad[:20]]
+    return "\n".join(L)
+
+
+def cmd_report(a):
+    md = report(_doc(a.plans))
+    print(md)
+    if a.out:
+        Path(a.out).write_text(md + "\n", encoding="utf-8"); print(f"\nwrote {a.out}")
+
+
+def cmd_ambiguity(a):
+    from .eval import ambiguity, ambiguity_table, chunks_from_plan
+    chunks, chain, cfg = chunks_from_plan(a.plans, hands=a.hands)
+    if a.limit:
+        chunks = chunks[: a.limit]
+    print(f"{len(chunks)} chunks, {sum(len(c['pos']) for c in chunks)} frames; "
+          f"what averaging the joint actions of a base grid costs at the tool:\n")
+    rows = ambiguity(chain, chunks, _floats(a.spans), a.zspan, cfg["pos_tol"], np.radians(cfg["rot_tol"]))
+    print(ambiguity_table(rows))
+    print("\nRule: augment bases only with joint deltas or end-effector actions, unless the policy "
+          "can tell the bases apart from its state.")
+    if a.out:
+        Path(a.out).write_text(json.dumps(rows, indent=1), encoding="utf-8"); print(f"\nwrote {a.out}")
+
+
+def cmd_probe(a):
+    from .eval import chunks_from_plan, load_policy, probe, probe_table
+    chunks, chain, cfg = chunks_from_plan(a.plans, hands=a.hands)
+    if a.limit:
+        chunks = chunks[: a.limit]
+    policies = {p: load_policy(p) for p in a.policy}
+    res = probe(chain, chunks, policies, _floats(a.offsets), cfg["pos_tol"], np.radians(cfg["rot_tol"]),
+                grasp_rows=a.grasp_rows, knn_grid_cm=_floats(a.knn_grid) if a.knn_grid else None)
+    print(f"{len(chunks)} chunks, {res['rows']['0']['frames']} frame pairs at the plan's bases. "
+          f"Median miss of the predicted next tool point when the base moves:\n")
+    print(probe_table(res, "miss_cm"))
+    if res["rows"]["0"].get("grasp_frames"):
+        print(f"\nWithin {a.grasp_rows} rows of the jaws closing ({res['rows']['0']['grasp_frames']} frames):\n")
+        print(probe_table(res, "grasp_cm"))
+    if any("nll" in v for v in res["rows"]["0"].values() if isinstance(v, dict)):
+        print("\nLikelihood of the re-solved action (nats; lower is more likely):\n"); print(probe_table(res, "nll"))
+        print("\nLikelihood of the UNSHIFTED action at the shifted state -- should fall as the shift grows:\n")
+        print(probe_table(res, "nll_replay"))
+    print("\nReplay misses by exactly the shift; the oracle by nothing. A policy near the replay line "
+          "memorised its base. This does not predict success (see docs).")
+    if a.out:
+        Path(a.out).write_text(json.dumps(res, indent=1), encoding="utf-8"); print(f"\nwrote {a.out}")
+
+
+def cmd_serve(a):
+    try:
+        import uvicorn
+        from .service import app
+    except ImportError:
+        raise SystemExit("the service needs fastapi and uvicorn: pip install 'omnibase[service]'")
+    uvicorn.run(app, host=a.host, port=a.port)
 
 
 def main(argv=None):
@@ -757,6 +942,49 @@ def main(argv=None):
     q.add_argument("--out", default=None, metavar="PLANS.json")
     q.set_defaults(func=cmd_sweep)
 
+    q = sub.add_parser("place", help="where should the robot stand? executable frames from every base, over a dataset")
+    common(q)
+    q.add_argument("--workers", type=int, default=1, metavar="N")
+    q.add_argument("--episodes", default=None, metavar="I,J,K")
+    q.add_argument("--out", default=None, metavar="PLANS.json",
+                   help="where the sweep is written (default: next to the dataset). Give a PLANS.json "
+                        "as the dataset to reuse one.")
+    q.add_argument("--place-out", default=None, metavar="PLACE.json", help="the map and the best bases, as JSON")
+    q.add_argument("--top", type=int, default=5, help="how many runner-up bases to list")
+    q.set_defaults(func=cmd_place)
+
+    q = sub.add_parser("report", help="a dataset as a robot sees it: yield, grasps, pauses, workspace, the base map")
+    q.add_argument("plans", metavar="PLANS.json", help="from `omnibase sweep --out` or `omnibase place`")
+    q.add_argument("--out", default=None, metavar="REPORT.md")
+    q.set_defaults(func=cmd_report)
+
+    q = sub.add_parser("ambiguity", help="is base augmentation safe for this action space? miss in cm, no training")
+    q.add_argument("plans", metavar="PLANS.json")
+    q.add_argument("--spans", default="2,4,6", metavar="CM,CM", help="half-widths of the 3x3 base grids to test")
+    q.add_argument("--zspan", type=float, default=0.0, metavar="CM", help="also +- this in height (3x3x3)")
+    q.add_argument("--hands", default=None)
+    q.add_argument("--limit", type=int, default=None, help="first N chunks only")
+    q.add_argument("--out", default=None, metavar="OUT.json")
+    q.set_defaults(func=cmd_ambiguity)
+
+    q = sub.add_parser("probe", help="does a policy know where it stands? miss in cm against a base shift, no rollout")
+    q.add_argument("plans", metavar="PLANS.json")
+    q.add_argument("--policy", action="append", default=[], metavar="module:attr",
+                   help="a callable policy(state, where) -> action in radians; may carry .nll(state, action, where). Repeatable.")
+    q.add_argument("--knn-grid", default="-6,-3,0,3,6", metavar="CM,..",
+                   help="add two nearest-neighbour references, fit at one base and on this grid; '' for none")
+    q.add_argument("--offsets", default="2,4,6,8", metavar="CM,CM")
+    q.add_argument("--grasp-rows", type=int, default=5)
+    q.add_argument("--hands", default=None)
+    q.add_argument("--limit", type=int, default=None, help="first N chunks only")
+    q.add_argument("--out", default=None, metavar="OUT.json")
+    q.set_defaults(func=cmd_probe)
+
+    q = sub.add_parser("serve", help="run the web service and UI (pip install 'omnibase[service]')")
+    q.add_argument("--host", default="127.0.0.1")
+    q.add_argument("--port", type=int, default=8000)
+    q.set_defaults(func=cmd_serve)
+
     q = sub.add_parser("curve", help="yield against how long one base must serve")
     common(q)
     q.set_defaults(func=cmd_curve)
@@ -820,6 +1048,9 @@ def main(argv=None):
                    help="write a source's episodes N times. Sixteen episodes of the task you "
                         "care about, among ten thousand of something else, are 0.2%% of the "
                         "sampler's attention.")
+    q.add_argument("--action", default="absolute", choices=("absolute", "delta"),
+                   help="absolute joint targets, or next-minus-current joint deltas. Deltas "
+                        "survive a base shift; absolute targets carry the base inside them.")
     q.add_argument("--fixed-base", action="store_true",
                    help="ignore the chunking and stand the arm in one place for the whole "
                         "episode, keeping only the frames it can hold. The honest comparison.")

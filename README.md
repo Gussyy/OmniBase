@@ -30,6 +30,39 @@ sharper or blurrier than it is.
 
 ---
 
+## What ships
+
+Six things, each one command, each answering one question about robot data. Every number on
+this page was produced by them; none needs a simulator, a trained model, or new recordings.
+
+| command | question | what you get |
+|---|---|---|
+| `omnibase place` | Where should the robot stand for this dataset? | executable frames from every base on a grid, the best base, a map |
+| `omnibase export` | Make these human demonstrations trainable on this arm | a LeRobot dataset, one base per window, `--action delta` for base-robust actions |
+| `omnibase report` | What is in this dataset, as the robot sees it? | yield fixed vs per-window, grasp events, still frames, workspace, the map |
+| `omnibase ambiguity` | Is base augmentation safe for my action space? | the miss in cm from averaging joint actions across bases |
+| `omnibase probe` | Does my policy know where it stands, or did it memorise the motion? | miss in cm against a base shift, bracketed by replay (= the shift) and oracle (= 0) |
+| `omnibase serve` | The same, as a web service with a page in front | jobs, logs, results over HTTP |
+
+```bash
+pip install -e ".[data]"
+
+omnibase place   datasets/cans --hands right --tcp 0.0748 --home 0.18,0.28,0.08 --workers 8 \
+                 --out cans_plans.json --place-out cans_place.json
+omnibase report  cans_plans.json --out cans_report.md
+omnibase export  cans_plans.json --out datasets/so101_cans --fps 10 --action delta
+omnibase ambiguity cans_plans.json
+omnibase probe   cans_plans.json --policy my_adapter:policy
+```
+
+On the 16 can-picking recordings used throughout this page (`place` in 30 s, the rest under a
+minute each): the best single base holds 52.5% of frames and one base per 21-frame window
+78.5%; averaging joint actions over a ±4 cm base grid costs 4.3 cm at the tool for absolute
+targets and 0.3 cm for deltas; a policy fit at one base misses by 3.9 cm under a 4 cm shift
+and one fit on a base grid by 1.1 cm.
+
+---
+
 ## The idea in one table
 
 A policy never sees a whole episode at once. It sees an observation window and predicts an
@@ -230,6 +263,11 @@ python -m omnibase sweep datasets/mine --workers 14 --out plans.json   # the who
 python -m omnibase level datasets/mine --frame fastumi --out level.json  # what do its numbers mean?
 python -m omnibase select plans.json --budget-gb 90 --out selection.json # what is worth fetching?
 python -m omnibase export plans.json --out datasets/so101 --fps 10       # make it trainable
+python -m omnibase place  datasets/mine --workers 14 --out plans.json    # where should it stand? (sweep + map)
+python -m omnibase report plans.json --out report.md                     # the dataset as the robot sees it
+python -m omnibase ambiguity plans.json                                  # is base augmentation safe here?
+python -m omnibase probe  plans.json --policy my_adapter:policy          # did the policy memorise its base?
+python -m omnibase serve                                                 # the above, over HTTP with a page
 ```
 
 `--hands` takes names or indices (`--hands right`, `--hands 0,1`); the default is every hand in
@@ -372,6 +410,7 @@ to match, and the metadata LeRobot reads without conversion.
 python -m omnibase select plans_*.json --budget-gb 90 --out selection.json
 python -m omnibase export plans_*.json --out datasets/so101 --fps 10 --workers 8
 python -m omnibase export plans_*.json --out datasets/so101_fixed --fixed-base --fps 10
+python -m omnibase export plans_*.json --out datasets/so101_delta --action delta --fps 10   # base-robust actions
 ```
 
 `select` exists because of the shape of this data: a FastUMI episode is 30 kB of poses and 10 MB
@@ -400,7 +439,131 @@ masked to the same shape instead of somebody eyeballing it later.
 
 ---
 
+## Evaluate without a simulator
+
+The wrist camera rides on the hand, so a demonstration frame's picture is the same from every
+base; only the joint state changes, and OmniBase can re-solve it for any base by arithmetic.
+That one fact gives two instruments that need no rollout, no renderer and no new data.
+
+### Is base augmentation safe? — `omnibase ambiguity`
+
+Writing one demonstration from several bases (to teach a policy more than one posture) hands an
+image-conditioned policy one observation with several joint-space labels. It learns their mean.
+`ambiguity` computes what that mean costs at the tool, before anything is trained:
+
+```
+$ omnibase ambiguity cans_plans.json --spans 2,4,6
+| base spread (+- cm) | bases | frames held by all | absolute joints: miss cm (p90) | joint deltas: miss cm (p90) | end-effector |
+|---|---|---|---|---|---|
+| 2 | 9 | 348 | 2.1 (2.9) | 0.1 (0.5) | 0 |
+| 4 | 9 | 206 | 4.3 (5.9) | 0.3 (0.9) | 0 |
+| 6 | 9 | 72  | 6.7 (9.0) | 0.4 (1.2) | 0 |
+```
+
+Absolute joint targets carry the base inside them: the miss is about the spread of the bases,
+and spreading in height is the worst of it (`--zspan 4` on top of ±2 cm already costs 4.4 cm).
+Joint deltas — `omnibase export --action delta` — stay under half a centimetre; end-effector
+actions are zero by construction. We found this the expensive way: a fine-tune on a
+multi-height augmentation put the jaws 3.3 cm off and regressed to 0/4. The table above says
+so in twenty seconds.
+
+### Does the policy know where it stands? — `omnibase probe`
+
+Move the base by *b*, re-solve the same frames, feed the policy the re-solved state, push its
+prediction through forward kinematics, and measure the miss against the re-solved target. Two
+references bracket every answer: replaying the unshifted rows misses by exactly |*b*| — that is
+what calibrates the number — and the re-solved rows miss by nothing.
+
+```
+$ omnibase probe cans_plans.json
+| policy (cm)               | 0 cm | 2 cm | 4 cm | 6 cm | 8 cm |
+|---|---|---|---|---|---|
+| replay (unshifted rows)   | 0.0 | 2.0 | 4.0 | 6.0 | 8.0 |
+| joint deltas (unshifted)  | 0.0 | 0.1 | 0.3 | 0.4 | 0.6 |
+| knn (one base)            | 0.0 | 2.0 | 3.9 | 5.1 | 6.0 |
+| knn (base grid)           | 0.0 | 1.3 | 1.1 | 0.0 | 2.3 |
+| oracle (re-solved)        | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
+| re-solve feasible         | 77% | 73% | 63% | 50% | 41% |
+```
+
+The two nearest-neighbour rows are built in as references: one fit at the plan's own bases,
+one on a ±6 cm grid. The first is a memoriser and tracks the replay line; the second reads its
+state and stays flat. The same table is printed for the rows around the jaw closing, where a
+pick is decided, and the last row is the fair-test boundary — where the demonstration is not
+executable from the shifted base, a policy cannot be blamed for missing it.
+
+Your own policy plugs in as a callable, importable from the working directory:
+
+```python
+# my_adapter.py
+import numpy as np
+
+def policy(state, where):
+    """state: (N, 5) joint angles in radians; where: (N, 2) [episode, frame] into the source
+    dataset, for a policy that needs the picture. Return (N, 5) next joints in radians."""
+    ...
+
+def nll(state, action, where):                 # optional: -log p(action | state), nats
+    ...
+policy.nll = nll
+```
+
+```bash
+omnibase probe cans_plans.json --policy my_adapter:policy
+```
+
+If the policy has a likelihood (a flow-matching policy has an exact one, a diffusion policy a
+bound) the probe also reports NLL of the re-solved action against the shift, and NLL of the
+*unshifted* action at the shifted state: a policy that knows the base finds the old action less
+likely as the base moves. On a small flow-matching policy the contrast was +8 nats at 8 cm when
+trained at one base and +0.5 when trained on a grid, while the point miss under-reported it
+(2.8 cm). The likelihood sees every mode; the sampled mean averages them away.
+
+### What these do not measure
+
+Success. This was tested rather than assumed: on PushT with LeRobot's public diffusion policy,
+every one of the 206 demonstrations was scored offline — denoising loss, distance to sampled
+chunks, sample spread, the state-perturbation contrast above — and the policy was rolled out
+from that demonstration's own starting state. No score separated the starts it succeeded from
+(AUC 0.48–0.57; chance is 0.5). The length of the *human's* demonstration, which needs no
+model, did better (0.36). Success is decided on the policy's own states at a few critical
+frames, and a model's opinion of a human's path says nothing about that. `ambiguity` and
+`probe` answer data questions — is this augmentation safe, is this policy base-invariant — and
+the library will not print a predicted success rate. Details in
+[docs/experiment/2026-09-09_fastumi_so101_smolvla.md](docs/experiment/2026-09-09_fastumi_so101_smolvla.md), §11.
+
+---
+
+## As a service
+
+```bash
+pip install -e ".[data,service]"
+omnibase serve --host 0.0.0.0 --port 8000        # then open http://localhost:8000
+```
+
+The page runs `place`, `report`, `ambiguity` and `probe` and shows, under the form, the exact
+command line it is about to run — the service adds nothing the command line cannot do. Each
+job is one subprocess; its output is the log, its `--out` file is the result. Datasets are read
+from paths on the machine the service runs on.
+
+```
+POST /jobs            {"tool": "place", "args": {"dataset": "/data/cans", "hands": "right", "workers": 8}}
+GET  /jobs            GET /jobs/{id}   GET /jobs/{id}/log   GET /jobs/{id}/result   GET /health
+```
+
+```bash
+docker build -t omnibase . && docker run -p 8000:8000 -v /srv/data:/data -v /srv/work:/work omnibase
+```
+
+There is no authentication and no upload; put it behind whatever your network already trusts.
+
+---
+
 ## Where should it stand, and where should it not
+
+`omnibase place` answers the dataset-wide question by counting: executable frames from every
+base, summed over every episode, and the best cell. This section is the finer, per-episode
+answer — not just *can* it reach from here but *how well*.
 
 Reachability alone is a poor answer. A base can reach every frame and still be a bad place to
 put a robot: if the arm is stretched flat, or riding a joint stop, or passing through a
@@ -521,6 +684,15 @@ and keep the test. Do not fit the table to the model.
   never claims a frame is usable when it is not. About 3.5% of exactly-achievable poses land in
   the wrong branch, which is where that gap comes from.
 
+- **Offline scores do not predict success.** Measured, not argued: see *Evaluate without a
+  simulator*. The instruments here tell you whether an augmentation is safe and whether a
+  policy has memorised its base. Whether it picks the can is a rollout's question.
+
+- **Multi-base augmentation is not a free lunch.** Writing one demonstration from many bases
+  with absolute joint targets teaches an image-conditioned policy the mean of several answers.
+  `ambiguity` prices that; `export --action delta` removes most of it. With absolute targets,
+  the policy also has to be able to tell the bases apart from its state.
+
 ---
 
 ## Tests
@@ -530,6 +702,7 @@ python tests/test_omnibase.py       # kinematics, chunking, scoring
 python tests/test_data.py           # LeRobot loading -- builds its own datasets in a temp dir
 python tests/test_frames.py         # frame calibration of a rig that does not say what its numbers mean
 python tests/test_robots.py         # the robot model against link positions measured in the simulator
+python tests/test_eval.py           # replay misses by exactly the shift, the oracle by nothing; ambiguity ~ the spread
 # or, all:  python -m pytest
 ```
 
