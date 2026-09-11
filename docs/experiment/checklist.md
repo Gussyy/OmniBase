@@ -53,3 +53,14 @@ Ticked as things land. Times are local. Companion to `2026-09-09_fastumi_so101_s
 - [ ] z-shift offsets in the probe (`ambiguity.py` already takes `--zspan`)
 - [ ] Relative-EE export, then re-run both tools on it (expect 0)
 - [ ] Open-loop replay never grasps in sim (jaw timing / geometry) -- parked
+
+## Shipped (2026-09-12, v0.3.0)
+- [x] `omnibase place` (executable frames per base over a dataset, best base, map, JSON)
+- [x] `omnibase report` (yield, grasps, still frames, workspace, map; markdown)
+- [x] `omnibase ambiguity` (package version of the metric; reproduces 2.1/4.3/6.7)
+- [x] `omnibase probe` (replay/delta/oracle references, kNN references, `--policy module:attr`, `.nll` contrast)
+- [x] `omnibase export --action delta`
+- [x] `omnibase serve` + UI + Dockerfile
+- [x] tests/test_eval.py; README sections "What ships", "Evaluate without a simulator", "As a service"
+- [ ] LeRobot policy adapter example for `probe` (image + state)
+- [ ] `probe` on held-out demonstrations

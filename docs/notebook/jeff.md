@@ -283,3 +283,22 @@ different questions. Same for sample distance and the perturbation contrast at t
 states. Offline scores of this kind are instruments for data questions (does the model contain
 this behaviour; is an augmentation safe; is the policy base-invariant), not success predictors.
 Consequence for the library: say so in the docs, and never ship a "predicted success" number.
+
+### 2026-09-11 22:30 -> 12 00:10 -- shipped 0.3.0 (commit 3664b4a)
+What went in: `place`, `report`, `ambiguity`, `probe`, `export --action delta`, `serve`
+(FastAPI + one plain page), Dockerfile, `omnibase/eval.py`, tests/test_eval.py (8 tests,
+whole suite 46 green). Verified on the can data: place 30 s -> (0.18, 0.28) 52.5%, chunked
+78.5%; ambiguity reproduces 2.1/4.3/6.7; probe reproduces replay = shift, kNN grid flat.
+Design decisions worth remembering:
+- sweep records `reach` (per-cell counts), `grasps`, `still`, `extent` per episode, so place
+  and report are pure aggregations of the plans JSON. Old plans without `reach` are refused.
+- probe's policy interface: `policy(state, where) -> action` radians, optional `.nll`.
+  `where` = (episode, frame) so an adapter can fetch the image. kNN references built in;
+  no torch in the package.
+- service = subprocess per job, one worker, the page shows the exact argv. No auth/upload.
+- UI: user said "don't make it look AI slop" -> monospace, no rounded cards, greyscale map,
+  the command line under the form. Labels are the CLI flags.
+- README says plainly: none of this predicts success (PushT).
+Not done / next: a LeRobot adapter example for probe (needs a checkpoint); `place` with
+the comfort score per cell (score_map is per episode and slow); probe on held-out demos;
+the user's PushT-style validation of probe on a policy with images.
