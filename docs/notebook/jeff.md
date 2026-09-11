@@ -318,3 +318,12 @@ Borrowed the materials, spent the effort on use:
 - Bug found while testing: inline onclick with JSON.stringify(path) broke on quotes ->
   handlers bound in JS. Lesson: never build handlers as strings.
 Contrast checked: ink-2 (L 0.42) on bg ~ 8:1; amber-ink on amber ~ 8:1.
+
+### 2026-09-12 01:10 -- how-to video, PRODUCT.md, DESIGN.md
+- `docs/howto/record.py`: Playwright drives the service against can_v3d (8 episodes,
+  stride 3) with captions injected only for the recording; ffmpeg -> howto.mp4 (3 MB, 105 s)
+  and howto.gif (6 MB, 880 px, 6 fps). Embedded in the README under "How to use it".
+  Reproducible on any dataset.
+- Impeccable updated to 4.3.1 (applies next session). Init done: PRODUCT.md (register
+  product, users "anyone who likes robots" per the user, personality precise/plain/honest,
+  WCAG 2.1 AA), DESIGN.md (tokens, components, motion as built).
