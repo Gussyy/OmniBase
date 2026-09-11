@@ -5,150 +5,253 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>omnibase</title>
 <style>
+  :root {
+    --ink: oklch(0.18 0.01 70); --ink-2: oklch(0.42 0.01 70); --ink-3: oklch(0.62 0.01 70);
+    --bg: oklch(0.985 0.003 80); --panel: oklch(0.955 0.006 80); --line: oklch(0.86 0.008 80); --line-2: oklch(0.93 0.006 80);
+    --dark: oklch(0.21 0.012 60); --dark-ink: oklch(0.92 0.01 80); --dark-mute: oklch(0.68 0.02 75);
+    --amber: oklch(0.76 0.16 68); --amber-ink: oklch(0.2 0.02 60); --amber-soft: oklch(0.94 0.05 78); --amber-line: oklch(0.62 0.15 62);
+    --bad: oklch(0.55 0.19 28); --bad-soft: oklch(0.95 0.03 28);
+    --t: 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
   * { box-sizing:border-box }
-  body { margin:0; font:13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; color:#111; background:#fff }
-  header { padding:10px 16px; border-bottom:1px solid #111; display:flex; gap:24px; align-items:baseline }
-  header b { font-size:14px } header span { color:#555 }
-  main { display:grid; grid-template-columns: 360px 1fr; min-height:calc(100vh - 38px) }
-  @media (max-width: 860px) { main { grid-template-columns:1fr } }
-  nav { border-right:1px solid #111; padding:12px 16px }
-  section { padding:12px 16px; min-width:0 }
-  .tools { display:flex; gap:0; margin-bottom:12px; border:1px solid #111 }
-  .tools button { flex:1; border:0; border-right:1px solid #111; background:#fff; padding:5px 0; font:inherit; cursor:pointer }
-  .tools button:last-child { border-right:0 } .tools button.on { background:#111; color:#fff }
-  .f { display:grid; grid-template-columns: 120px 1fr; gap:4px 8px; align-items:center }
-  .f label { color:#555; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-  .f input { width:100%; padding:3px 5px; border:1px solid #bbb; font:inherit; background:#fff } .f input:focus { outline:none; border-color:#111 }
-  .run { margin-top:10px; padding:5px 14px; border:1px solid #111; background:#fff; font:inherit; cursor:pointer } .run:hover { background:#111; color:#fff } .run:disabled { opacity:.4 }
-  .help { color:#555; margin-top:10px; border-top:1px solid #ddd; padding-top:8px }
-  .cmd { color:#555; margin-top:8px; word-break:break-all }
-  .jobs { margin-top:16px; border-top:1px solid #111; padding-top:8px }
-  .jobs div { padding:2px 0; cursor:pointer; display:grid; grid-template-columns: 52px 72px 1fr; gap:8px } .jobs div:hover { background:#f0f0f0 }
-  .queued { color:#888 } .running { color:#111 } .done { color:#111 } .failed { color:#b00 }
-  h2 { font-size:13px; font-weight:bold; margin:0 0 4px } h3 { font-size:13px; font-weight:normal; color:#555; margin:16px 0 4px }
-  pre { margin:0; padding:8px; border:1px solid #bbb; overflow:auto; max-height:320px; white-space:pre; font:inherit; background:#fafafa }
-  table { border-collapse:collapse; margin:4px 0 } th, td { border:1px solid #bbb; padding:2px 8px; text-align:right } th:first-child, td:first-child { text-align:left } th { font-weight:normal; color:#555 }
-  canvas { border:1px solid #bbb; max-width:100%; display:block }
-  a { color:#111 }
-  .kv { display:grid; grid-template-columns:max-content 1fr; gap:2px 12px } .kv span:nth-child(odd) { color:#555 }
+  html { color-scheme: light }
+  body { margin:0; font:13px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; color:var(--ink); background:var(--bg) }
+  a { color:var(--ink) }
+  button { font:inherit; color:inherit; cursor:pointer }
+  header { display:flex; align-items:baseline; gap:20px; padding:10px 18px; border-bottom:1px solid var(--ink) }
+  header b { font-size:14px } header .v { color:var(--ink-3) } header .tag { color:var(--ink-2); margin-left:auto }
+  main { display:grid; grid-template-columns: 400px minmax(0, 1fr); min-height: calc(100vh - 40px) }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr } nav { border-right:0; border-bottom:1px solid var(--ink) } }
+  @media (max-width: 600px) { header .tag { display:none } }
+  nav { border-right:1px solid var(--ink); background:var(--panel); padding:14px 18px 22px; display:flex; flex-direction:column; gap:14px }
+  section { padding:14px 22px 30px; min-width:0 }
+
+  /* the plan on hand: what every step after the first reads */
+  .plan { display:grid; grid-template-columns: auto minmax(0,1fr) auto; gap:8px; align-items:baseline; padding:8px 10px; border:1px solid var(--line); background:var(--bg) }
+  .plan .k { color:var(--ink-2) } .plan .p { overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .plan .p.none { color:var(--ink-3) }
+  .plan.set { border-color:var(--amber-line); background:var(--amber-soft) }
+  .plan button { background:none; border:0; padding:0; color:var(--ink-2) } .plan button:hover { color:var(--amber-line) }
+
+  .steps { display:grid; grid-template-columns: repeat(4, 1fr); border:1px solid var(--ink) }
+  .steps button { background:transparent; border:0; border-right:1px solid var(--ink); padding:7px 4px; display:flex; flex-direction:column; align-items:center; gap:1px; transition: background var(--t), color var(--t) }
+  .steps button:last-child { border-right:0 } .steps button small { color:var(--ink-3); font-size:11px }
+  .steps button:hover { background:var(--line-2) } .steps button.on { background:var(--ink); color:var(--bg) } .steps button.on small { color:var(--dark-mute) }
+  .steps button:disabled { color:var(--ink-3); cursor:not-allowed } .steps button:disabled:hover { background:transparent }
+
+  .about { color:var(--ink-2) }
+  form { display:flex; flex-direction:column; gap:10px }
+  .f { display:grid; grid-template-columns: 118px minmax(0,1fr); gap:6px 10px; align-items:center }
+  .f label { color:var(--ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis } .f label.req::after { content:" *"; color:var(--amber-line) }
+  .f input { width:100%; padding:5px 7px; border:1px solid var(--line); background:var(--bg); font:inherit; color:var(--ink); transition: border-color var(--t), box-shadow var(--t) }
+  .f input:hover { border-color:var(--ink-3) } .f input:focus { outline:none; border-color:var(--amber-line); box-shadow: 0 0 0 2px var(--amber-soft) }
+  .f input::placeholder { color:var(--ink-3) } .f input[aria-invalid="true"] { border-color:var(--bad); background:var(--bad-soft) }
+  .f .hint { grid-column: 2; color:var(--ink-3); font-size:12px; margin-top:-3px }
+  details { border-top:1px solid var(--line) } summary { padding:8px 0 6px; color:var(--ink-2); cursor:pointer; list-style:none; display:flex; gap:6px } summary::-webkit-details-marker { display:none }
+  summary::before { content:"[+]"; color:var(--ink-3) } details[open] summary::before { content:"[-]" } details .f { padding-bottom:4px }
+
+  .run { align-self:flex-start; padding:6px 14px; background:var(--amber); color:var(--amber-ink); border:1px solid var(--amber-line); font-weight:600; transition: background var(--t), transform var(--t) }
+  .run:hover { background:oklch(0.8 0.17 70) } .run:active { transform: translateY(1px) } .run:disabled { background:var(--line); border-color:var(--line); color:var(--ink-3); cursor:wait }
+  .err { color:var(--bad); min-height:1.2em }
+  .cmd { color:var(--ink-2); word-break:break-all; border-top:1px solid var(--line); padding-top:8px } .cmd::before { content:"$ "; color:var(--ink-3) }
+
+  .jobs { border-top:1px solid var(--line); padding-top:8px; display:flex; flex-direction:column; gap:2px }
+  .jobs h3 { margin:0 0 4px } .jobs .j { display:grid; grid-template-columns: 8px 62px 1fr auto; gap:8px; align-items:center; padding:3px 6px; margin:0 -6px; background:transparent; border:0; text-align:left; transition: background var(--t) }
+  .jobs .j:hover { background:var(--line-2) } .jobs .j.cur { background:var(--bg); outline:1px solid var(--line) }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--ink-3) } .dot.running { background:var(--amber); animation: pulse 1.2s ease-in-out infinite } .dot.done { background:var(--ink) } .dot.failed { background:var(--bad) }
+  .jobs .id { color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .jobs .t { color:var(--ink-3) }
+  @keyframes pulse { 50% { opacity:.35 } }
+
+  h2 { font-size:13px; font-weight:600; margin:0 } h3 { font-size:12px; font-weight:normal; color:var(--ink-2); margin:18px 0 6px; text-transform:none }
+  .head { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap } .status { color:var(--ink-2) } .status.failed { color:var(--bad) } .status.running { color:var(--amber-line) }
+  .acts { display:flex; gap:12px; margin-top:6px; flex-wrap:wrap } .acts a, .acts button { white-space:nowrap } .acts a, .acts button { background:none; border:0; padding:0; color:var(--ink); text-decoration:none } .acts a::before, .acts button::before { content:"[" } .acts a::after, .acts button::after { content:"]" } .acts a:hover, .acts button:hover { color:var(--amber-line) }
+
+  .kv { display:grid; grid-template-columns: max-content minmax(0,1fr); gap:3px 14px; max-width:70ch } .kv span:nth-child(odd) { color:var(--ink-2) } .kv b { font-weight:600 }
+  table { border-collapse:collapse; margin:4px 0 } th, td { border:1px solid var(--line); padding:3px 9px; text-align:right; font-variant-numeric:tabular-nums } th:first-child, td:first-child { text-align:left } th { font-weight:normal; color:var(--ink-2); background:var(--panel); white-space:nowrap }
+  tr.ref td { color:var(--ink-2) } td.hi { background:var(--amber-soft) }
+  .tw { overflow-x:auto }
+  canvas { display:block; max-width:100%; border:1px solid var(--line); background:var(--bg) }
+  .legend { color:var(--ink-3); font-size:12px; margin-top:4px }
+
+  pre.out { margin:0; padding:10px 12px; background:var(--dark); color:var(--dark-ink); border:0; overflow:auto; max-height:340px; white-space:pre; font:inherit; font-size:12px }
+  pre.md { margin:0; padding:10px 12px; background:var(--bg); border:1px solid var(--line); overflow:auto; white-space:pre-wrap; font:inherit; max-width:90ch }
+
+  .empty { max-width:66ch; color:var(--ink-2) } .empty p { margin:8px 0 } .empty b { color:var(--ink) }
+  .empty ol { padding-left:1.4em; margin:8px 0 } .empty li { margin:4px 0 } .empty code { background:var(--panel); padding:1px 5px }
+
+  @media (prefers-reduced-motion: reduce) { * { transition:none !important; animation:none !important } .dot.running { opacity:1 } }
 </style>
 </head>
 <body>
-<header><b>omnibase</b><span id="ver"></span><span>where would the robot have to stand</span></header>
+<header><b>omnibase</b><span class="v" id="ver"></span><span class="tag">where would the robot have to stand</span></header>
 <main>
   <nav>
-    <div class="tools" id="tabs"></div>
-    <form class="f" id="form" onsubmit="return false"></form>
-    <button class="run" id="run">run</button>
+    <div class="plan" id="plan"><span class="k">plan</span><span class="p none" id="planpath">none yet — run place first</span><button class="j" id="planclear" hidden>[clear]</button></div>
+    <div class="steps" id="steps"></div>
+    <div class="about" id="about"></div>
+    <form id="form"></form>
+    <button class="run" id="run" type="button">run</button>
+    <div class="err" id="err"></div>
     <div class="cmd" id="cmd"></div>
-    <div class="help" id="hint"></div>
     <div class="jobs" id="jobs"></div>
   </nav>
-  <section>
-    <h2 id="title">no job selected</h2>
-    <div id="status"></div>
-    <div id="result"></div>
-    <h3>output</h3>
-    <pre id="log"></pre>
-  </section>
+  <section id="right"></section>
 </main>
 <script>
-// Labels are the CLI flags: what the page runs is `omnibase <tool> <positional> --flag value`, shown under the button.
-const TOOLS = {
-  place: { pos: "dataset", hint: "Executable frames from every candidate base, summed over the dataset. Takes a dataset (runs the sweep) or a PLANS.json from an earlier run. Writes the map and the best bases.",
-    fields: [["dataset","dataset | PLANS.json",""],["robot","--robot","so101"],["hands","--hands",""],["column","--column","action"],["tcp","--tcp (m)",""],["stride","--stride","1"],
-             ["step","--step (m)","0.05"],["span","--span (m)","0.42"],["height","--height (m)","0.08"],["home","--home x,y,z",""],["window","--window","21"],["pos_tol","--pos-tol (m)","0.015"],["rot_tol","--rot-tol (deg)","20"],["workers","--workers","4"],["frame","--frame",""],["level","--level",""]] },
-  report: { pos: "plans", hint: "The dataset as the robot sees it: yield for fixed vs per-window bases, grasp events, still frames, workspace, the base map. Markdown.",
-    fields: [["plans","PLANS.json",""]] },
-  ambiguity: { pos: "plans", hint: "Is base augmentation safe for this action space? The miss at the tool if a policy averages the joint actions of a base grid. No training.",
-    fields: [["plans","PLANS.json",""],["spans","--spans (cm)","2,4,6"],["zspan","--zspan (cm)","0"],["hands","--hands",""],["limit","--limit",""]] },
-  probe: { pos: "plans", hint: "Does a policy know where it stands? Miss at the tool against a base shift, between replay (= the shift) and the re-solved oracle (= 0). No rollout. A policy is module:attr importable from the server's working directory. This does not predict success.",
-    fields: [["plans","PLANS.json",""],["offsets","--offsets (cm)","2,4,6,8"],["knn_grid","--knn-grid (cm)","-6,-3,0,3,6"],["grasp_rows","--grasp-rows","5"],["policy","--policy",""],["hands","--hands",""],["limit","--limit",""]] },
+// Four steps, in the order the work happens. place produces a plan; the other three read it.
+const STEPS = {
+  place: { n: "1", title: "place", sub: "where to stand", pos: "dataset",
+    about: "Sum executable frames from every candidate base over the whole dataset. Takes a LeRobot dataset (runs the sweep) or a PLANS.json from an earlier run. Produces the plan every later step reads.",
+    main: [["dataset","dataset","E:/data/cans","a LeRobot v2.1 / v3.0 dataset, or PLANS.json"],["robot","--robot","so101",""],["hands","--hands","right","name or index; blank = every hand"],["home","--home","0.18,0.28,0.08","where the robot really stands, x,y,z — optional"]],
+    more: [["tcp","--tcp (m)","","tool-centre offset along the approach"],["stride","--stride","1","every Nth frame"],["column","--column","action",""],["step","--step (m)","0.05","grid spacing"],["span","--span (m)","0.42","grid half-width"],["height","--height (m)","0.08","base height"],["window","--window","21","frames one base must serve"],["pos_tol","--pos-tol (m)","0.015",""],["rot_tol","--rot-tol (deg)","20",""],["workers","--workers","4",""],["frame","--frame","","frame preset, e.g. fastumi"],["level","--level","","LEVEL.json from omnibase level"]] },
+  report: { n: "2", title: "report", sub: "what is in it", pos: "plans",
+    about: "The dataset as the robot sees it: yield for a fixed base against one base per window, grasp events, still frames, workspace, the base map. Markdown you can keep.",
+    main: [["plans","plan","","from step 1"]], more: [] },
+  ambiguity: { n: "3", title: "ambiguity", sub: "augment safely?", pos: "plans",
+    about: "Is base augmentation safe for your action space? The miss at the tool if a policy averages the joint actions of a base grid — absolute targets against joint deltas. Nothing is trained.",
+    main: [["plans","plan","","from step 1"],["spans","--spans (cm)","2,4,6","half-widths of the 3x3 base grids"],["zspan","--zspan (cm)","0","also ± this in height"]], more: [["hands","--hands","",""],["limit","--limit","","first N chunks only"]] },
+  probe: { n: "4", title: "probe", sub: "memorised the base?", pos: "plans",
+    about: "Does a policy know where it stands? Its miss at the tool against a base shift, between replay (= the shift) and the re-solved oracle (= 0). No rollout. Your policy is module:attr importable from the server's working directory. This does not predict success.",
+    main: [["plans","plan","","from step 1"],["policy","--policy","","module:attr — optional; the kNN references run anyway"],["offsets","--offsets (cm)","2,4,6,8",""]], more: [["knn_grid","--knn-grid (cm)","-6,-3,0,3,6","blank for no kNN references"],["grasp_rows","--grasp-rows","5","rows around the jaw closing"],["hands","--hands","",""],["limit","--limit","","first N chunks only"]] },
 };
-let tool = "place", current = null, timer = null;
 const $ = id => document.getElementById(id);
-function tabs() { $("tabs").innerHTML = Object.keys(TOOLS).map(t => `<button class="${t===tool?'on':''}" onclick="pick('${t}')">${t}</button>`).join(""); }
-function pick(t) { tool = t; tabs(); form(); }
-function form() {
-  const f = TOOLS[tool]; $("hint").textContent = f.hint;
-  $("form").innerHTML = f.fields.map(([k, label, def]) => `<label title="${label}">${label}</label><input name="${k}" value="${def}" oninput="cmdline()">`).join("");
-  cmdline();
+let step = "place", plan = null, current = null, timer = null, JOBS = [];
+try { plan = localStorage.getItem("omnibase.plan") || null; } catch (e) {}
+
+function steps() {
+  $("steps").innerHTML = Object.entries(STEPS).map(([k, s]) => `<button type="button" class="${k===step?'on':''}" ${k !== 'place' && !plan ? 'disabled title="run place first"' : ''} onclick="go('${k}')">${s.n} ${s.title}<small>${s.sub}</small></button>`).join("");
 }
-function args() { const a = {}; for (const el of $("form").elements) if (el.value !== "") a[el.name] = el.value; return a; }
+function go(k) { step = k; steps(); form(); }
+function field([k, label, def, hint], req) {
+  const v = k === "plans" && plan ? plan : def;
+  return `<label class="${req?'req':''}" for="f_${k}" title="${label}">${label}</label><input id="f_${k}" name="${k}" value="${esc(v)}" placeholder="${esc(def)}" oninput="cmdline()">` + (hint ? `<div class="hint">${hint}</div>` : "");
+}
+function form() {
+  const s = STEPS[step]; $("about").textContent = s.about;
+  $("form").innerHTML = `<div class="f">${s.main.map((f, i) => field(f, i === 0)).join("")}</div>` +
+    (s.more.length ? `<details><summary>more options</summary><div class="f">${s.more.map(f => field(f)).join("")}</div></details>` : "");
+  $("err").textContent = ""; cmdline();
+  $("form").onkeydown = e => { if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); run(); } };
+}
+function args() { const a = {}; for (const el of $("form").elements) if (el.name && el.value !== "") a[el.name] = el.value; return a; }
 function cmdline() {
-  const a = args(), pos = TOOLS[tool].pos;
-  $("cmd").textContent = "$ omnibase " + tool + " " + (a[pos] || "…") + Object.entries(a).filter(([k]) => k !== pos).map(([k, v]) => ` --${k.replace(/_/g, "-")} ${v}`).join("");
+  const a = args(), s = STEPS[step];
+  $("cmd").textContent = "omnibase " + step + " " + (a[s.pos] || "…") + Object.entries(a).filter(([k]) => k !== s.pos).map(([k, v]) => ` --${k.replace(/_/g, "-")} ${v}`).join("");
+}
+function setPlan(p, remember = true) {
+  plan = p || null; if (remember) try { p ? localStorage.setItem("omnibase.plan", p) : localStorage.removeItem("omnibase.plan"); } catch (e) {}
+  $("plan").classList.toggle("set", !!plan); $("planpath").textContent = plan || "none yet — run place first"; $("planpath").classList.toggle("none", !plan); $("planpath").title = plan || "";
+  $("planclear").hidden = !plan; steps();
+  const el = $("f_plans"); if (el && plan) { el.value = plan; cmdline(); }
 }
 async function run() {
-  $("run").disabled = true;
-  const r = await fetch("/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tool, args: args() }) });
-  $("run").disabled = false;
-  if (!r.ok) { $("status").textContent = (await r.json()).detail; return; }
+  const s = STEPS[step], a = args(), first = $("f_" + s.pos);
+  first.setAttribute("aria-invalid", "false");
+  if (!a[s.pos]) { first.setAttribute("aria-invalid", "true"); first.focus(); $("err").textContent = s.pos === "plans" ? "no plan: run place first, or give a PLANS.json" : "a dataset path is needed"; return; }
+  $("run").disabled = true; $("run").textContent = "starting…"; $("err").textContent = "";
+  const r = await fetch("/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tool: step, args: a }) });
+  $("run").disabled = false; $("run").textContent = "run";
+  if (!r.ok) { const d = await r.json().catch(() => ({})); $("err").textContent = d.detail || r.statusText; first.setAttribute("aria-invalid", "true"); return; }
   const j = await r.json(); watch(j.id); jobs();
 }
 async function jobs() {
-  const list = await (await fetch("/jobs")).json();
-  $("jobs").innerHTML = list.map(j => `<div onclick="watch('${j.id}')"><span class="${j.status}">${j.status}</span><span>${j.tool}</span><span>${j.id}</span></div>`).join("") || "<span class='queued'>no jobs yet</span>";
+  JOBS = await (await fetch("/jobs")).json();
+  $("jobs").innerHTML = "<h3>jobs</h3>" + (JOBS.map(j => `<button type="button" class="j ${j.id===current?'cur':''}" onclick="watch('${j.id}')"><span class="dot ${j.status}"></span><span>${j.tool}</span><span class="id">${j.id}</span><span class="t">${elapsed(j)}</span></button>`).join("") || `<span class="id">none yet</span>`);
 }
+function elapsed(j) { if (!j.started) return ""; const s = Math.round(((j.finished || Date.now() / 1000) - j.started)); return s < 60 ? s + "s" : Math.floor(s / 60) + "m" + (s % 60) + "s"; }
 function watch(id) { current = id; clearInterval(timer); poll(); timer = setInterval(poll, 1500); }
 async function poll() {
   const j = await (await fetch("/jobs/" + current)).json();
-  $("title").textContent = `${j.tool}  ${j.id}`;
-  $("status").innerHTML = `<span class="${j.status}">${j.status}</span>` + (j.error ? "  " + esc(j.error) : "") + `<div class="cmd">$ ${esc(j.argv.slice(2).join(" "))}</div>`;
+  const done = j.status === "done" || j.status === "failed";
+  if (!$("right").dataset.job || $("right").dataset.job !== j.id) {
+    $("right").dataset.job = j.id;
+    $("right").innerHTML = `<div class="head"><h2>${j.tool}</h2><span class="status" id="st"></span><span class="id" id="el"></span></div><div class="acts" id="acts"></div><div id="result"></div><h3>output</h3><pre class="out" id="log"></pre>`;
+  }
+  $("st").textContent = j.status + (j.error ? " — " + j.error : ""); $("st").className = "status " + j.status; $("el").textContent = elapsed(j);
   $("log").textContent = await (await fetch(`/jobs/${current}/log`)).text(); $("log").scrollTop = $("log").scrollHeight;
-  if (j.status === "done" || j.status === "failed") { clearInterval(timer); jobs(); $("result").innerHTML = ""; if (j.status === "done") render(j); }
+  if (done) { clearInterval(timer); jobs(); actions(j); if (j.status === "done") render(j); else $("result").innerHTML = ""; }
+  else jobs();
 }
+function actions(j) {
+  const acts = $("acts"); acts.innerHTML = "";
+  const add = (label, fn, href) => { const el = document.createElement(href ? "a" : "button"); el.textContent = label; if (href) { el.href = href; el.target = "_blank"; } else { el.type = "button"; el.onclick = fn; } acts.appendChild(el); };
+  if (j.status === "done" && j.result_kind) add("result file", null, `/jobs/${j.id}/result`);
+  if (j.status === "done" && (j.tool === "place" || j.tool === "sweep") && j.plans) { add("use this plan → report", () => { setPlan(j.plans); go("report"); }); add("use this plan", () => setPlan(j.plans)); }
+  add("run again", () => rerun(j.id));
+}
+function rerun(id) { const j = JOBS.find(x => x.id === id); if (!j) return; go(j.tool); for (const [k, v] of Object.entries(j.args)) { const el = $("f_" + k); if (el) { el.value = v; if (el.closest("details")) el.closest("details").open = true; } } cmdline(); }
 async function render(j) {
   const r = await fetch(`/jobs/${j.id}/result`); if (!r.ok) return;
-  const dl = `<h3><a href="/jobs/${j.id}/result" target="_blank">result file</a></h3>`;
-  if (j.tool === "report") { $("result").innerHTML = dl + `<pre style="max-height:none">${esc(await r.text())}</pre>`; return; }
+  if (j.tool === "report") { $("result").innerHTML = `<pre class="md">${esc(await r.text())}</pre>`; return; }
   const d = await r.json();
-  if (j.tool === "place") return place(d, dl);
-  if (j.tool === "ambiguity") return $("result").innerHTML = dl + table(["base spread ± cm","bases","frames held by all","absolute joints: miss cm (p90)","joint deltas: miss cm (p90)","end-effector"],
-      d.map(x => [x.span_cm, x.bases, x.frames, x.absolute_cm==null?"-":`${x.absolute_cm.toFixed(1)} (${x.absolute_p90_cm.toFixed(1)})`, x.delta_cm==null?"-":`${x.delta_cm.toFixed(1)} (${x.delta_p90_cm.toFixed(1)})`, 0]));
-  if (j.tool === "probe") return probe(d, dl);
-  $("result").innerHTML = dl + `<pre>${esc(JSON.stringify(d, null, 1))}</pre>`;
+  if (j.tool === "place") return place(d);
+  if (j.tool === "ambiguity") return $("result").innerHTML = `<h3>miss at the tool if a policy averages the joint actions of the grid, cm (p90)</h3><div class="tw">` +
+    table(["base spread ± cm", "bases", "frames held by all", "absolute joint targets", "joint deltas", "end-effector"],
+      d.map(x => [x.span_cm, x.bases, x.frames, x.absolute_cm == null ? "-" : `${x.absolute_cm.toFixed(1)} (${x.absolute_p90_cm.toFixed(1)})`, x.delta_cm == null ? "-" : `${x.delta_cm.toFixed(1)} (${x.delta_p90_cm.toFixed(1)})`, "0"]), r => r[3] !== "-" && parseFloat(r[3]) >= 2 ? [3] : []) +
+    `</div><div class="legend">absolute targets carry the base inside them; deltas (export --action delta) do not; end-effector actions are zero by construction</div>`;
+  if (j.tool === "probe") return probe(d);
+  $("result").innerHTML = `<pre class="md">${esc(JSON.stringify(d, null, 1))}</pre>`;
 }
-function probe(d, dl) {
+function probe(d) {
   const radii = ["0", ...[...new Set(d.offsets.filter(t => t !== "0").map(t => t.slice(2)))].sort((a, b) => a - b)];
   const tagsAt = r => r === "0" ? ["0"] : d.offsets.filter(t => t !== "0" && t.slice(2) === r);
   const at = (n, r, key) => { const v = tagsAt(r).map(t => d.rows[t][n] && d.rows[t][n][key]).filter(x => x != null); return v.length ? median(v).toFixed(1) : "-"; };
-  const mk = key => table(["", ...radii.map(r => r + " cm")], d.names.map(n => [n, ...radii.map(r => at(n, r, key))]).concat([["re-solve feasible", ...radii.map(r => (100 * median(tagsAt(r).map(t => d.rows[t].feasible))).toFixed(0) + "%")]]));
-  let h = dl + "<h3>median miss at the tool point, cm, all frames</h3>" + mk("miss_cm");
-  if (d.rows["0"].grasp_frames) h += `<h3>same, within the grasp rows (${d.rows["0"].grasp_frames} frames)</h3>` + mk("grasp_cm");
-  if (Object.values(d.rows["0"]).some(v => v && v.nll != null)) h += "<h3>NLL of the re-solved action, nats</h3>" + mk("nll") + "<h3>NLL of the unshifted action at the shifted state</h3>" + mk("nll_replay");
+  const isRef = n => /^(replay|joint deltas|oracle|knn)/.test(n);
+  const mk = key => table(["", ...radii.map(r => r + " cm")],
+    d.names.map(n => [n, ...radii.map(r => at(n, r, key))]).concat([["re-solve feasible", ...radii.map(r => (100 * median(tagsAt(r).map(t => d.rows[t].feasible))).toFixed(0) + "%")]]),
+    null, row => isRef(row[0]) || row[0] === "re-solve feasible");
+  let h = `<h3>median miss of the predicted next tool point, cm — all frames</h3><div class="tw">${mk("miss_cm")}</div>`;
+  if (d.rows["0"].grasp_frames) h += `<h3>same, within the rows around the jaw closing (${d.rows["0"].grasp_frames} frames)</h3><div class="tw">${mk("grasp_cm")}</div>`;
+  if (Object.values(d.rows["0"]).some(v => v && v.nll != null)) h += `<h3>NLL of the re-solved action, nats</h3><div class="tw">${mk("nll")}</div><h3>NLL of the unshifted action at the shifted state — should rise with the shift</h3><div class="tw">${mk("nll_replay")}</div>`;
+  h += `<div class="legend">grey rows are references: replay misses by exactly the shift, the oracle by nothing; a policy on the replay line memorised its base. None of this predicts success.</div>`;
   $("result").innerHTML = h;
 }
-function place(d, dl) {
-  let h = dl + `<div class="kv"><span>episodes</span><span>${d.totals.episodes}</span><span>frames</span><span>${d.totals.frames}</span>
-    <span>best fixed base per episode</span><span>${(100*d.totals.fixed_per_episode).toFixed(1)}% of frames</span><span>one base per window</span><span>${(100*d.totals.chunked).toFixed(1)}%</span>`
+function place(d) {
+  let h = `<div class="kv"><span>episodes</span><span>${d.totals.episodes}</span><span>frames</span><span>${d.totals.frames}</span>
+    <span>best fixed base per episode</span><span>${(100*d.totals.fixed_per_episode).toFixed(1)}% of frames</span><span>one base per window</span><span><b>${(100*d.totals.chunked).toFixed(1)}%</b></span>`
     + (d.totals.at_home != null ? `<span>from the robot's own base</span><span>${(100*d.totals.at_home).toFixed(1)}%</span>` : "") + "</div>";
   for (const [name, hd] of Object.entries(d.hands)) {
-    h += `<h3>hand ${name}</h3><div class="kv"><span>stand at</span><span>(${hd.best.base.map(v => v.toFixed(2)).join(", ")}) m: ${(100*hd.best.fraction).toFixed(1)}% of ${hd.frames} frames from one fixed base</span>`
-      + (hd.home ? `<span>own base</span><span>(${hd.home.base.map(v=>v.toFixed(2)).join(", ")}) m: ${(100*hd.home.fraction).toFixed(1)}%</span>` : "") + `</div><canvas id="map_${name}" width="480" height="480" style="margin-top:6px"></canvas>`;
+    h += `<h3>hand ${name}</h3><div class="kv"><span>stand at</span><span><b>(${hd.best.base.map(v => v.toFixed(2)).join(", ")}) m</b> — ${(100*hd.best.fraction).toFixed(1)}% of ${hd.frames} frames executable from one fixed base</span>`
+      + (hd.home ? `<span>own base</span><span>(${hd.home.base.map(v => v.toFixed(2)).join(", ")}) m — ${(100*hd.home.fraction).toFixed(1)}%</span>` : "") + `</div><canvas id="map_${name}" width="520" height="520" style="margin-top:8px"></canvas><div class="legend">darker = more frames executable from that base; x down the page, y across; amber = best, red = the robot's own base</div>`;
   }
   $("result").innerHTML = h;
   for (const [name, hd] of Object.entries(d.hands)) heat($("map_" + name), d.cells, hd.executable.map(v => v / hd.frames), hd.best.base, hd.home && hd.home.base);
 }
 function heat(cv, cells, frac, best, home) {
   const xs = [...new Set(cells.map(c => c[0]))].sort((a, b) => a - b), ys = [...new Set(cells.map(c => c[1]))].sort((a, b) => a - b);
-  const ctx = cv.getContext("2d"), pad = 40, W = cv.width - pad - 8, H = cv.height - pad - 8, cw = W / ys.length, ch = H / xs.length, top = Math.max(...frac, 1e-9);
-  const X = iy => pad + iy * cw, Y = ix => 8 + (xs.length - 1 - ix) * ch;
+  const ctx = cv.getContext("2d"), pad = 42, W = cv.width - pad - 10, H = cv.height - pad - 10, cw = W / ys.length, ch = H / xs.length, top = Math.max(...frac, 1e-9);
+  const X = iy => pad + iy * cw, Y = ix => 10 + (xs.length - 1 - ix) * ch;
   ctx.clearRect(0, 0, cv.width, cv.height);
-  cells.forEach((c, i) => { const g = frac[i] <= 0 ? 255 : Math.round(235 - 215 * frac[i] / top); ctx.fillStyle = `rgb(${g},${g},${g})`; ctx.fillRect(X(ys.indexOf(c[1])), Y(xs.indexOf(c[0])), cw - 1, ch - 1); });
-  ctx.font = "11px ui-monospace, monospace"; ctx.fillStyle = "#555"; ctx.textAlign = "center";
-  ys.forEach((y, i) => { if (i % Math.ceil(ys.length / 8) === 0) ctx.fillText(y.toFixed(2), X(i) + cw / 2, cv.height - 16); });
-  ctx.textAlign = "right"; xs.forEach((x, i) => { if (i % Math.ceil(xs.length / 8) === 0) ctx.fillText(x.toFixed(2), pad - 4, Y(i) + ch * .65); });
-  ctx.textAlign = "center"; ctx.fillText("y (m)", pad + W / 2, cv.height - 3);
-  ctx.save(); ctx.translate(10, 8 + H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText("x (m)", 0, 0); ctx.restore();
-  const mark = (b, col, txt, below) => { const ix = xs.indexOf(b[0]), iy = ys.indexOf(b[1]); if (ix < 0 || iy < 0) return; ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.strokeRect(X(iy) + 1, Y(ix) + 1, cw - 3, ch - 3); ctx.fillStyle = col; ctx.fillText(txt, X(iy) + cw / 2, Y(ix) + (below ? ch + 11 : -3)); };
-  mark(best, "#111", "best"); if (home) mark(home, "#b00", "own", true);
+  cells.forEach((c, i) => { const v = frac[i] / top; ctx.fillStyle = frac[i] <= 0 ? "#f6f5f2" : `oklch(${(0.95 - 0.72 * v).toFixed(3)} ${(0.01 + 0.02 * v).toFixed(3)} 70)`; ctx.fillRect(X(ys.indexOf(c[1])), Y(xs.indexOf(c[0])), cw - 1, ch - 1); });
+  ctx.font = "11px ui-monospace, Menlo, Consolas, monospace"; ctx.fillStyle = "#6b675f"; ctx.textAlign = "center";
+  ys.forEach((y, i) => { if (i % Math.ceil(ys.length / 8) === 0) ctx.fillText(y.toFixed(2), X(i) + cw / 2, cv.height - 18); });
+  ctx.textAlign = "right"; xs.forEach((x, i) => { if (i % Math.ceil(xs.length / 8) === 0) ctx.fillText(x.toFixed(2), pad - 5, Y(i) + ch * .65); });
+  ctx.textAlign = "center"; ctx.fillText("y (m)", pad + W / 2, cv.height - 4);
+  ctx.save(); ctx.translate(11, 10 + H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText("x (m)", 0, 0); ctx.restore();
+  const mark = (b, col, txt, below) => { const ix = xs.indexOf(b[0]), iy = ys.indexOf(b[1]); if (ix < 0 || iy < 0) return; ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.strokeRect(X(iy) + 1, Y(ix) + 1, cw - 3, ch - 3); ctx.fillStyle = col; ctx.fillText(txt, X(iy) + cw / 2, Y(ix) + (below ? ch + 12 : -4)); };
+  mark(best, "oklch(0.62 0.15 62)", "best"); if (home) mark(home, "oklch(0.55 0.19 28)", "own", true);
 }
-function table(head, rows) { return `<table><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</table>`; }
+function table(head, rows, hiCols, isRef) {
+  return `<table><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr>${rows.map(r => { const hi = hiCols ? hiCols(r) : []; return `<tr class="${isRef && isRef(r) ? 'ref' : ''}">${r.map((c, i) => `<td class="${hi.includes(i) ? 'hi' : ''}">${c}</td>`).join("")}</tr>`; }).join("")}</table>`;
+}
 function median(v) { const s = [...v].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
-function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function empty() {
+  $("right").innerHTML = `<div class="empty">
+    <h2>Four steps, one plan</h2>
+    <p>A person demonstrating with a hand-held gripper never thought about a robot's reach. OmniBase works out where a robot would have to stand to execute what they did, and then tells you what the data can and cannot teach a policy — by arithmetic, without a simulator.</p>
+    <ol>
+      <li><b>place</b> — give it a dataset. It sweeps every candidate base and writes a <b>plan</b>: where to stand, and one base per window of every episode.</li>
+      <li><b>report</b> — the dataset as that robot sees it: what a fixed base loses, grasp events, still frames, workspace.</li>
+      <li><b>ambiguity</b> — before you augment across bases: what averaging joint actions would cost, per action space.</li>
+      <li><b>probe</b> — with a policy: did it learn the motion, or where it stands?</li>
+    </ol>
+    <p>The line under the form is the command that runs — everything here is the command line with a page on it. Paths are on the machine the service runs on.</p>
+    <p>Try it: <code>omnibase place E:/data/cans --hands right --home 0.18,0.28,0.08</code></p>
+  </div>`;
+}
+$("run").onclick = run; $("planclear").onclick = () => setPlan(null);
 fetch("/health").then(r => r.json()).then(h => $("ver").textContent = "v" + (h.version || "")).catch(() => {});
-$("run").onclick = run; tabs(); form(); jobs();
+steps(); form(); setPlan(plan, false); empty(); jobs().then(() => { const running = JOBS.find(j => j.status === "running" || j.status === "queued"); if (running) watch(running.id); });
 </script>
 </body>
 </html>

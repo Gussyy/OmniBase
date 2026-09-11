@@ -302,3 +302,19 @@ Design decisions worth remembering:
 Not done / next: a LeRobot adapter example for probe (needs a checkpoint); `place` with
 the comfort score per cell (score_map is per episode and slow); probe on held-out demos;
 the user's PushT-style validation of probe on a policy with images.
+
+### 2026-09-12 00:40 -- UI pass (/impeccable, "easy to use, ideas from neo-mirai")
+Neo Mirai is a brand page (amber on dark, bracketed actions, one big artwork); this is a tool.
+Borrowed the materials, spent the effort on use:
+- The plan is a first-class object: a bar at the top holds the current PLANS.json; place
+  fills it ("use this plan -> report"), steps 2-4 are locked until it exists, it persists in
+  localStorage. Before, you copied a path between tabs.
+- Four numbered steps in work order, not four equal tabs. Essentials shown; the rest under
+  "[+] more options". Enter runs. Required field marked; empty/missing paths rejected by
+  the service (400) and shown inline.
+- Empty state explains the four steps; the exact command line sits under the form.
+- Amber = state only (current plan, run button, running dot, best cell). Dark output band.
+  Greyscale-warm map. 180 ms transitions, reduced-motion respected.
+- Bug found while testing: inline onclick with JSON.stringify(path) broke on quotes ->
+  handlers bound in JS. Lesson: never build handlers as strings.
+Contrast checked: ink-2 (L 0.42) on bg ~ 8:1; amber-ink on amber ~ 8:1.

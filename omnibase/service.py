@@ -70,6 +70,14 @@ def _argv(tool, args, result_path):
     return argv
 
 
+def _plans(tool, args, result_path):
+    """The plans file a job produces (place, sweep) or consumes (the rest), so the page can chain them."""
+    src = str(args.get("dataset") or args.get("plans") or "")
+    if tool in ("place", "sweep") and not src.lower().endswith(".json"):
+        return str(args.get("out") or result_path.with_name(result_path.stem + "_plans.json"))
+    return src or None
+
+
 def _run(job_id):
     j = JOBS[job_id]
     j["status"], j["started"] = "running", time.time()
@@ -104,8 +112,15 @@ def create(job: Job):
     job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
     _, kind = RESULT[job.tool]
     result_path = WORK / f"{job_id}.{kind}" if kind else None
-    argv = _argv(job.tool, job.args, result_path)
-    JOBS[job_id] = dict(id=job_id, tool=job.tool, args=job.args, argv=argv, status="queued",
+    src = job.args.get("dataset") or job.args.get("plans")
+    if src and not Path(str(src)).exists():
+        raise HTTPException(400, f"no such path on this machine: {src}")
+    args = dict(job.args)
+    plans = _plans(job.tool, args, result_path)
+    if job.tool == "place" and plans and "out" not in args and not str(args["dataset"]).lower().endswith(".json"):
+        args["out"] = plans                       # the sweep lands next to the result, not next to the dataset
+    argv = _argv(job.tool, args, result_path)
+    JOBS[job_id] = dict(id=job_id, tool=job.tool, args=args, argv=argv, status="queued", plans=plans,
                         created=time.time(), log_path=str(WORK / f"{job_id}.log"),
                         result_path=str(result_path) if result_path else None, result_kind=kind)
     with _lock:
