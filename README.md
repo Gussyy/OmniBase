@@ -55,6 +55,16 @@ omnibase ambiguity cans_plans.json
 omnibase probe   cans_plans.json --policy my_adapter:policy
 ```
 
+### How to use it
+
+![omnibase, start to finish: place a dataset, read the report, price an augmentation, probe a policy](docs/howto/howto.gif)
+
+The service driven end to end on the can recordings, 105 seconds: `place` sweeps eight
+episodes and draws the map, `report` reads the plan it wrote, `ambiguity` prices a base
+augmentation, `probe` measures a policy against a base shift. Every step shows the command it
+runs. [MP4](docs/howto/howto.mp4). The recording is reproducible:
+`python docs/howto/record.py --dataset <your dataset>`.
+
 On the 16 can-picking recordings used throughout this page (`place` in 30 s, the rest under a
 minute each): the best single base holds 52.5% of frames and one base per 21-frame window
 78.5%; averaging joint actions over a ±4 cm base grid costs 4.3 cm at the tool for absolute
@@ -541,8 +551,9 @@ pip install -e ".[data,service]"
 omnibase serve --host 0.0.0.0 --port 8000        # then open http://localhost:8000
 ```
 
-The page runs `place`, `report`, `ambiguity` and `probe` and shows, under the form, the exact
-command line it is about to run — the service adds nothing the command line cannot do. Each
+The page runs the four steps in order and keeps the plan between them: `place` writes it,
+`report`, `ambiguity` and `probe` read it. Under the form is the exact command line about to
+run — the service adds nothing the command line cannot do. [Watch it](docs/howto/howto.gif). Each
 job is one subprocess; its output is the log, its `--out` file is the result. Datasets are read
 from paths on the machine the service runs on.
 
